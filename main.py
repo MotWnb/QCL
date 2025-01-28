@@ -1,13 +1,12 @@
 import os
 import json
 import platform
+import re
 import shutil
-from _typeshed import SupportsWrite
 import aiohttp
 import aiofiles
 import asyncio
 import zipfile
-from typing import cast
 
 
 class DownloadClass:
@@ -30,62 +29,119 @@ class DownloadClass:
                 await asyncio.sleep(1)
                 await self.download_file(url, dest)
             else:
+                print(f"Error downloading file: {url}, {dest}")
                 raise e
+
     async def download_log4j2(self, version_info):
         if 'logging' not in version_info:
             log4j2_url = version_info['logging']['client']['file']['url']
             log4j2_path = ".minecraft/log_configs/log4j2.xml"
             await self.download_file(log4j2_url, log4j2_path)
+
     async def download_library(self, library, os_name, os_arch, version):
         need_extract = False
+        artifact = None
         if 'downloads' in library and 'artifact' in library['downloads']:
             artifact = library['downloads']['artifact']
-            library_path = f".minecraft/libraries/{artifact['path']}"
-        else:
-            raise ValueError(f"依赖库{library}没有下载链接")
 
         if "rules" in library:
-            rule = library["rules"][0]
-            if "action" in rule:
-                is_allowed = rule["action"] == True
-            else:
-                is_allowed = False
-            if "os" in rule and rule["os"]["name"] == os_name:
-                if is_allowed:
-                    await self.download_file(artifact['url'], library_path)
-                    need_extract = True
+            for rule in library["rules"]:  # 遍历规则
+                if "action" in rule:  # 如果规则中有action字段
+                    if rule["action"] == "allow":  # 如果规则是允许
+                        if "os" in rule:  # 如果规则中有os字段
+                            if rule["os"]["name"] == os_name:  # 当前操作系统-允许
+                                continue
+                            else:  # 当前操作系统-不允许
+                                return  # 直接返回，不再继续
+                        else:  # 没有os字段，允许
+                            continue
+                    elif rule["action"] == "disallow":  # 如果规则是拒绝
+                        if "os" in rule:  # 如果规则中有os字段
+                            if rule["os"]["name"] == os_name:  # 当前操作系统-拒绝
+                                return  # 直接返回，不再继续
+                            else:  # 非当前操作系统-未知
+                                continue
+                        else:  # 没有os字段-未知
+                            continue
+                    else:
+                        raise ValueError(f"依赖库{library}的规则中action字段不合法")
                 else:
-                    return
-            elif not "os" in rule:
-                raise ValueError(f"依赖库{library}没有指定操作系统")
-        elif "classifiers" in library["downloads"]:
+                    raise ValueError(f"依赖库{library}的规则中缺少action字段")
+
+        if "classifiers" in library["downloads"]:
             classifier = library["downloads"]["classifiers"]
             for native in classifier:
                 if native == f"natives-{os_name}":
-                    await self.download_file(classifier[native]["url"], library_path)
+                    artifact = classifier[native]
                     need_extract = True
-        else:
+        if artifact:
+            library_path = f".minecraft/libraries/{artifact['path']}"
             await self.download_file(artifact['url'], library_path)
-            return
+            if "native" in artifact['url']:
+                need_extract = True
+            if need_extract:
+                with zipfile.ZipFile(library_path, 'r') as zip_ref:
+                    extract_path = f".minecraft/versions/{version}/{version}-natives"
+                    os.makedirs(extract_path, exist_ok=True)
+                    file_dict = {}
+                    processed_dict = {}
+                    for member in zip_ref.namelist():
+                        # 跳过 META-INF 目录和空目录
+                        if member.startswith("META-INF/") or member.endswith("/"):
+                            continue
 
-        if need_extract:
-            with zipfile.ZipFile(library_path, 'r') as zip_ref:
-                extract_path = f".minecraft/versions/{version}/{version}-natives"
-                os.makedirs(extract_path, exist_ok=True)
-                for member in zip_ref.namelist():
-                    if not (member.startswith('META-INF/') or member.endswith('/')):
-                        if os_arch == "64" and ("86" in member or "32" in member or "arm" in member):
+                        # 过滤不符合架构的文件
+                        if (os_arch == "64" and any(x in member for x in ["86", "32", "arm"])) or \
+                                (os_arch == "86" and any(x in member for x in ["64", "arm"])) or \
+                                (os_arch == "arm64" and any(x in member for x in ["86", "32"])):
                             continue
-                        elif os_arch == "86" and ("64" in member or "arm" in member):
-                            continue
-                        elif os_arch == "arm64" and ("86" in member or "32" in member):
-                            continue
-                        source = zip_ref.open(member)
+
+                        # 构建提取文件的路径
                         extract_file_path = os.path.join(extract_path, os.path.basename(member))
-                        target = cast(SupportsWrite[bytes], open(extract_file_path, "wb"))
-                        with source, target:
-                            shutil.copyfileobj(source, target)
+                        file_dict[member] = extract_file_path
+                        # 使用 with 语句确保文件正确关闭
+                        # with zip_ref.open(member) as source, open(extract_file_path, "wb") as target:
+                        #     shutil.copyfileobj(source, target)  # type: ignore
 
+                    # 要删除的键的列表
+                    keys_to_delete = []
+
+                    for member, extract_file_path in file_dict.items():
+                        # 获取当前的文件名称，去除不需要的字符和后缀
+
+                        file_name_main = re.sub(r'(x86|x64|x32|86|64|32)', '', member)
+                        file_name_main = re.sub(r'[-_]', '', file_name_main)
+                        file_name_main = re.sub(r'\.\w+$', '', file_name_main)
+                        # 仅匹配连续的"86"、"64"、"32"、"x86"、"x64"或"x32"
+                        print(f"{member} -> {file_name_main}")
+                        # 检查处理后的文件名是否已经存在于processed_dict中
+                        if file_name_main in processed_dict:
+                            # 比较原名称的长度，保留更长的那个
+                            if len(member) > len(processed_dict[file_name_main][0]):
+                                print(f"存在冲突,删除短名称的键: {processed_dict[file_name_main][0]}")
+                                # 记录要删除的短名称的键
+                                keys_to_delete.append(processed_dict[file_name_main][0])
+                                # 更新processed_dict
+                                processed_dict[file_name_main] = (member, extract_file_path)
+                        else:
+                            # 如果处理后的文件名不存在于processed_dict中，直接添加
+                            processed_dict[file_name_main] = (member, extract_file_path)
+
+                    # 删除记录的键
+                    for key in keys_to_delete:
+                        if key in file_dict:
+                            del file_dict[key]
+                    for member, extract_file_path in file_dict.items():
+
+                        with zip_ref.open(member) as source, open(extract_file_path, "wb") as target:
+                            shutil.copyfileobj(source, target)  # type: ignore
+
+                            # BYD类型检查器硬控我半小时
+
+
+        else:
+            pass
+            # raise ValueError(f"依赖库{library}的下载地址或本地路径不合法")
     async def download_game_files(self, version_info, version, os_name, os_arch):
 
         libraries = version_info['libraries']
@@ -119,6 +175,8 @@ class DownloadClass:
                                f".minecraft/versions/{version}/{version}.jar"),
             self.download_log4j2(version_info)
         )
+
+
 async def get_cp(version_info, os_name):
     cp = ""
     if 'libraries' in version_info:
@@ -138,6 +196,8 @@ async def get_cp(version_info, os_name):
                 for native in classifier:
                     cp += f".minecraft/libraries/{classifier[native]['path']};"
     return cp
+
+
 def launcher(version_info, version, os_name):
     java_version = None
     if 'javaVersion' in version_info:
@@ -145,8 +205,6 @@ def launcher(version_info, version, os_name):
             java_version = version_info['javaVersion']['majorVersion']
     if not java_version:
         raise ValueError(f"版本{version}没有指定Java版本")
-
-
 
 
 async def get_os_info():
@@ -169,6 +227,8 @@ async def get_os_info():
         os_arch = "arm64"
 
     return os_name, os_arch
+
+
 async def main():
     os_name, os_arch = await get_os_info()
     user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n")
