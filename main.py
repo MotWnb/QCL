@@ -9,20 +9,34 @@ import asyncio
 import zipfile
 
 # 定义下载类，封装下载相关操作
-def _check_rules(library, os_name):
+def _check_rules(library, os_name, os_arch = None):
     for rule in library.get("rules", []):
         action = rule.get("action")
         if not action:
-            raise ValueError(f"依赖库{library}的规则中缺少action字段")
+            raise ValueError(f"{library}的规则中缺少action字段")
         os_condition = rule.get("os")
         if action == "allow":
-            if os_condition and os_condition["name"] != os_name:
-                return False
+            if os_condition:
+                if 'name' in os_condition:
+                    if os_condition["name"] != os_name:
+                        return False
+
+                if 'arch' in os_condition and os_condition["arch"] is not None:
+                    if os_condition["arch"] != os_arch:
+                        return False
+                return True
+
         elif action == "disallow":
-            if os_condition and os_condition["name"] == os_name:
-                return False
+            if os_condition:
+                if 'name' in os_condition:
+                    if os_condition["name"] == os_name:
+                        return False
+                if 'arch' in os_condition and os_condition["arch"] is not None:
+                    if os_condition["arch"] == os_arch:
+                        return False
+
         else:
-            raise ValueError(f"依赖库{library}的规则中action字段不合法")
+            raise ValueError(f"{library}的规则中action字段不合法")
     return True
 
 
@@ -50,10 +64,10 @@ class DownloadClass:
                     print(f"Error downloading file: {url}, {dest}")
                     raise e
 
-    async def download_log4j2(self, version_info):
+    async def download_log4j2(self, version_info, version):
         if 'logging' in version_info:
             log4j2_url = version_info['logging']['client']['file']['url']
-            log4j2_path = ".minecraft/log_configs/log4j2.xml"
+            log4j2_path = f".minecraft/versions/{version}/log4j2.xml"
             await self.download_file(log4j2_url, log4j2_path)
 
     async def download_library(self, library, os_name, os_arch, version):
@@ -147,11 +161,11 @@ class DownloadClass:
             self.download_assets(version_info),
             self.download_file(version_info.get('downloads', {}).get('client', {}).get('url'),
                                f".minecraft/versions/{version}/{version}.jar"),
-            self.download_log4j2(version_info)
+            self.download_log4j2(version_info, version)
         )
 
 # 异步获取类路径
-async def get_cp(version_info, os_name):
+async def get_cp(version_info, version,os_name):
     cp = ""
     for library in version_info.get('libraries', []):
         artifact = library.get('downloads', {}).get('artifact')
@@ -161,14 +175,72 @@ async def get_cp(version_info, os_name):
         if classifiers:
             for native in classifiers:
                 cp += f".minecraft/libraries/{classifiers[native]['path']};"
+    cp += f".minecraft/versions/{version}/{version}.jar"
     return cp
 
-# 启动器函数
-def launcher(version_info, version, os_name):
-    java_version = version_info.get('javaVersion', {}).get('majorVersion')
-    if not java_version:
-        raise ValueError(f"版本{version}没有指定Java版本")
+# 异步获取启动参数
+async def get_args(version_info, version, username, token):
+    os_name, os_arch = await get_os_info()
+    if os_arch != "arm64":
+        if os_arch == "32":
+            os_arch = "86"
+        os_arch = "x" + os_arch
+    game_args = ""
+    java_args = ""
+    main_class = version_info.get("mainClass")
+    if main_class is None:
+        raise ValueError(f"版本{version}没有找到mainClass")
+    game_args_list = version_info.get('arguments', {}).get('game', [])
+    for i in range(len(game_args_list)):
+        if type(game_args_list[i]) == str:
+            game_args += (" " + game_args_list[i])
+        elif type(game_args_list[i]) == dict:
+            pass
+        else:
+            raise ValueError(f"不支持的参数类型{type(game_args_list[i])},位于{version_info['arguments']['game'][i]}")
+    java_args_list = version_info.get('arguments', {}).get('jvm', [])
+    for i in range(len(java_args_list)):
+        if type(java_args_list[i]) == str:
+            java_args += (" " + java_args_list[i])
+        elif type(java_args_list[i]) == dict:
+            if _check_rules(java_args_list[i], os_name, os_arch):
+                java_arg = java_args_list[i].get('value', '')
+                java_args += java_arg
+                print(f"在java参数中{java_args_list[i]}获取到了匹配的参数:{java_arg}")
+        else:
+            raise ValueError(f"不支持的参数类型{type(java_args_list[i])},位于{version_info['arguments']['jvm'][i]}")
+        if "-Djava.library.path=${natives_directory}" not in java_args:
+            java_args += "-Djava.library.path=${natives_directory}"
 
+    cp = await get_cp(version_info, version, os_name)
+    game_directory = os.path.join(os.getcwd(), ".minecraft")
+    natives_directory = os.path.join(game_directory, "versions", version, f"{version}-natives")
+    assets_root = os.path.join(game_directory, "assets")
+    version_directory = os.path.join(game_directory, "versions", version)
+    log4j_path = os.path.join(version_directory, "log4j2.xml")
+    log4j_arg = version_info.get('logging', {}).get('client', {}).get('argument', '').replace("${path}", log4j_path)
+    replacements = {
+        "${auth_player_name}": username,
+        "${classpath}": cp,
+        "${natives_directory}": natives_directory,
+        "${launcher_name}": "Minecraft Launcher",
+        "${launcher_version}": "1.0",
+        "${version_name}": version,
+        "${version_type}": version_info.get('type', 'release'),
+        "${assets_root}": assets_root,
+        "${assets_index_name}": version_info.get('assets', 'legacy'),
+        "${game_directory}": game_directory,
+    }
+    args = f"{java_args} "
+    for key, value in replacements.items():
+        args = args.replace(key, value)
+    return args
+
+# 启动器函数
+async def launcher(version_info, version, os_name):
+    username = input("请输入你的用户名:")
+    # 获取启动参数
+    args = await get_args(version_info, version, username)
 # 异步获取操作系统信息
 async def get_os_info():
     os_name = platform.system().lower()
@@ -223,7 +295,7 @@ async def main():
             version_info_path = f".minecraft/versions/{version}/{version}.json"
             async with aiofiles.open(version_info_path, 'r') as file:
                 version_info = json.loads(await file.read())
-            launcher(version_info, version, os_name)
+            await launcher(version_info, version, os_name)
 
 if __name__ == "__main__":
     asyncio.run(main())
