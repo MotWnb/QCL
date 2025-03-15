@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import platform
 import re
@@ -7,17 +8,12 @@ import shlex
 import shutil
 import subprocess
 import sys
-import time
-import webbrowser
 import zipfile
-from platform import java_ver
 from threading import Thread
 from typing import Dict, Set, List, Callable
 
 import aiofiles
 import aiohttp
-import pyperclip
-import logging
 import psutil
 
 
@@ -51,210 +47,6 @@ def _check_rules(library, os_name, os_arch=None):
         else:
             raise ValueError(f"{library}的规则中action字段不合法")
     return True
-
-
-async def _xsts_auth(xbl_token):
-    # Xbox Live 二级认证 (XSTS)
-    xsts_url = "https://xsts.auth.xboxlive.com/xsts/authorize"
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    payload = {
-        "Properties": {
-            "SandboxId": "RETAIL",
-            "UserTokens": [xbl_token]
-        },
-        "RelyingParty": "rp://api.minecraftservices.com/",
-        "TokenType": "JWT"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(xsts_url, json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                raise Exception("XSTS authentication failed")
-            return (await resp.json())['Token']
-
-
-async def _minecraft_auth(uhs, xsts_token):
-    # Minecraft 认证
-    mc_url = "https://api.minecraftservices.com/authentication/login_with_xbox"
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    payload = {
-        "identityToken": f"XBL3.0 x={uhs};{xsts_token}"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(mc_url, json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                raise Exception("Minecraft authentication failed")
-            return (await resp.json())['access_token']
-
-
-class MinecraftAuthenticator:
-    def __init__(self, client_id="de243363-2e6a-44dc-82cb-ea8d6b5cd98d", refresh_token=None):
-        self.client_id = client_id
-        self.refresh_token = refresh_token
-        self.access_token = None
-        self.minecraft_access_token = None
-        self.username = None
-        self.uuid = None
-
-    async def _get_device_code(self):
-        code_pair_url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
-        payload = {
-            "client_id": self.client_id,
-            "scope": "XboxLive.signin offline_access",
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(code_pair_url, data=payload, headers=headers) as resp:
-                data = await resp.json()
-                if resp.status != 200:
-                    raise Exception(f"Failed to get device code: {data}")
-                return data
-
-    async def _wait_for_authorization(self, device_code, interval, expires_in):
-        token_url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
-        payload = {
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            "client_id": self.client_id,
-            "device_code": device_code,
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        start_time = time.time()
-
-        async with aiohttp.ClientSession() as session:
-            while True:
-                if time.time() - start_time > expires_in:
-                    raise Exception("Device code expired")
-
-                async with session.post(token_url, data=payload, headers=headers) as resp:
-                    data = await resp.json()
-
-                if resp.status == 200:
-                    self.access_token = data.get("access_token")
-                    self.refresh_token = data.get("refresh_token")
-                    return
-                elif data.get("error") == "authorization_pending":
-                    await asyncio.sleep(interval)
-                elif data.get("error") == "slow_down":
-                    interval += 5
-                    await asyncio.sleep(interval)
-                else:
-                    raise Exception(f"Authorization failed: {data.get('error')}")
-
-    async def _xbox_live_auth(self):
-        # Xbox Live 一级认证
-        xbox_url = "https://user.auth.xboxlive.com/user/authenticate"
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        payload = {
-            "Properties": {
-                "AuthMethod": "RPS",
-                "SiteName": "user.auth.xboxlive.com",
-                "RpsTicket": f"d={self.access_token}"
-            },
-            "RelyingParty": "http://auth.xboxlive.com",
-            "TokenType": "JWT"
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(xbox_url, json=payload, headers=headers) as resp:
-                if resp.status != 200:
-                    raise Exception("Xbox Live authentication failed")
-                data = await resp.json()
-                return data['Token'], data['DisplayClaims']['xui'][0]['uhs']
-
-    async def _verify_ownership(self):
-        # 验证游戏所有权
-        url = "https://api.minecraftservices.com/entitlements/mcstore"
-        headers = {"Authorization": f"Bearer {self.minecraft_access_token}"}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200 or not (await resp.json()).get('items'):
-                    raise Exception("Game ownership verification failed")
-
-    async def _get_profile(self):
-        # 获取玩家档案
-        url = "https://api.minecraftservices.com/minecraft/profile"
-        headers = {"Authorization": f"Bearer {self.minecraft_access_token}"}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    raise Exception("Failed to get player profile")
-                data = await resp.json()
-                self.username = data['name']
-                self.uuid = data['id']
-
-    async def authenticate(self):
-        """完整的认证流程"""
-        # 设备代码流登录
-        if not self.refresh_token:
-            code_data = await self._get_device_code()
-            print(f"请访问 {code_data['verification_uri']} 输入代码: {code_data['user_code']}")
-            pyperclip.copy(code_data['user_code'])
-            webbrowser.open(code_data['verification_uri'])
-            await self._wait_for_authorization(
-                code_data['device_code'],
-                code_data['interval'],
-                code_data['expires_in']
-            )
-
-        # 如果已有刷新令牌，优先使用
-        if self.refresh_token and not self.access_token:
-            await self.refresh_token()
-
-        # Xbox 认证流程
-        xbl_token, uhs = await self._xbox_live_auth()
-        xsts_token = await _xsts_auth(xbl_token)
-
-        # Minecraft 认证
-        self.minecraft_access_token = await _minecraft_auth(uhs, xsts_token)
-
-        # 验证游戏所有权
-        await self._verify_ownership()
-
-        # 获取玩家信息
-        await self._get_profile()
-
-        return {
-            "username": self.username,
-            "uuid": self.uuid,
-            "access_token": self.minecraft_access_token,
-            "refresh_token": self.refresh_token
-        }
-
-    async def refresh_token(self):
-        """刷新访问令牌"""
-        if not self.refresh_token:
-            raise Exception("No refresh token available")
-
-        token_url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
-        payload = {
-            "client_id": self.client_id,
-            "refresh_token": self.refresh_token,
-            "grant_type": "refresh_token",
-            "scope": "XboxLive.signin offline_access"
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, data=payload, headers=headers) as resp:
-                if resp.status != 200:
-                    raise Exception("Token refresh failed")
-                data = await resp.json()
-                self.access_token = data['access_token']
-                self.refresh_token = data['refresh_token']
-                return self.access_token
 
 
 class DownloadClass:
@@ -406,7 +198,6 @@ async def async_find_java() -> Dict[str, str]:
     java_executables = ("javaw.exe", "java.exe")
     keywords = {"java", "jdk", "jre", "oracle", "minecraft", "runtime"}
     ignore_dirs = {"windows", "program files", "system32", "temp"}
-    version_pattern = re.compile(r'"(\d+\.\d+)[._]\d+\D*"')
     scanned_paths: Set[str] = set()
     java_versions: Dict[str, str] = {}
 
@@ -658,6 +449,8 @@ def execute_javaw_blocking(
     process.stderr.close()
 
     return process.returncode
+
+
 # 启动器函数
 async def launcher(version_info, version):
     # username = input("请输入你的用户名:")
@@ -666,7 +459,6 @@ async def launcher(version_info, version):
     # 启动并输出程序输出，不异步
     exit_code = execute_javaw_blocking(args)
     print(f"进程退出码: {exit_code}")
-
 
 
 # 异步获取操作系统信息
