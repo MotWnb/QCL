@@ -10,12 +10,13 @@ import aiohttp
 
 from utils import _check_rules
 
-
 class DownloadClass:
     def __init__(self, session):
         self.session = session
 
     async def download_file(self, url, dest):
+        retry_count = 0
+        max_retries = 5
         while True:
             try:
                 async with self.session.get(url) as response:
@@ -30,7 +31,13 @@ class DownloadClass:
                     break
             except aiohttp.ClientResponseError as e:
                 if e.status == 429:
-                    await asyncio.sleep(1)
+                    # 动态调整等待时间
+                    wait_time = min(2 ** retry_count, 30)
+                    await asyncio.sleep(wait_time)
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        print(f"Max retries reached for {url}, {dest}")
+                        raise e
                 else:
                     print(f"Error downloading file: {url}, {dest}")
                     raise e
@@ -98,9 +105,11 @@ class DownloadClass:
                     for key in keys_to_delete:
                         if key in file_dict:
                             del file_dict[key]
-                    for member, extract_file_path in file_dict.items():
-                        with zip_ref.open(member) as source, open(extract_file_path, "wb") as target:
-                            shutil.copyfileobj(source, target)  # type:ignore
+                    # 批量处理文件解压
+                    with zip_ref:
+                        for member, extract_file_path in file_dict.items():
+                            with zip_ref.open(member) as source, open(extract_file_path, "wb") as target:
+                                shutil.copyfileobj(source, target) # type:ignore
 
     async def download_game_files(self, version_info, version, os_name, os_arch):
         libraries = version_info.get('libraries', [])

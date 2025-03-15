@@ -12,7 +12,7 @@ from launcher import MinecraftLauncher
 async def main():
     os_name, os_arch = await get_os_info()
     user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n")
-    connector = aiohttp.TCPConnector(limit_per_host=25)
+    connector = aiohttp.TCPConnector(limit_per_host=1024)
     async with aiohttp.ClientSession(connector=connector) as session:
         version_manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest.json"
         version_manifest_path = ".minecraft/version_manifest.json"
