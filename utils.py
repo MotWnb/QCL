@@ -8,28 +8,42 @@ from typing import Dict, Set, List
 import psutil
 
 
-def _check_rules(library, os_name, os_arch=None):
-    for rule in library.get("rules", []):
-        action = rule.get("action")
-        if not action:
-            raise ValueError(f"{library}的规则中缺少action字段")
-        os_condition = rule.get("os")
+def _check_rules(element, os_name, os_arch=None, features=None):
+    """增强版规则检查，支持 features 条件"""
+    rules = element.get("rules", [])
+    if not rules:
+        return True  # 无规则默认允许
+
+    final_allow = False
+    for rule in rules:
+        action = rule.get("action", "allow")
+        os_cond = rule.get("os", {})
+        feature_cond = rule.get("features", {})
+
+        # 检查操作系统条件
+        os_match = True
+        if 'name' in os_cond and os_cond['name'] != os_name:
+            os_match = False
+        if 'arch' in os_cond and os_cond.get('arch') not in (None, os_arch):
+            os_match = False
+
+        # 检查 feature 条件
+        feature_match = True
+        for feat_key, feat_val in feature_cond.items():
+            if features.get(feat_key, None) != feat_val:
+                feature_match = False
+
+        # 规则逻辑判断
         if action == "allow":
-            if os_condition:
-                if 'name' in os_condition and os_condition["name"] != os_name:
-                    return False
-                if 'arch' in os_condition and os_condition["arch"] is not None and os_condition["arch"] != os_arch:
-                    return False
-            return True
+            if os_match and feature_match:
+                final_allow = True
+            else:
+                return False  # 任意一个 allow 规则不满足则拒绝
         elif action == "disallow":
-            if os_condition:
-                if 'name' in os_condition and os_condition["name"] == os_name:
-                    return False
-                if 'arch' in os_condition and os_condition["arch"] is not None and os_condition["arch"] == os_arch:
-                    return False
-        else:
-            raise ValueError(f"{library}的规则中action字段不合法")
-    return True
+            if os_match or feature_match:
+                return False
+
+    return final_allow
 
 
 async def get_cp(version_info, version, os_name):
