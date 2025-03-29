@@ -72,44 +72,50 @@ class DownloadClass:
             library_path = f".minecraft/libraries/{artifact['path']}"
             await self.download_file(artifact['url'], library_path)
             need_extract = need_extract or "natives" in artifact['url']
+
             if need_extract:
                 extract_path = f".minecraft/versions/{version}/{version}-natives"
                 os.makedirs(extract_path, exist_ok=True)
-                with zipfile.ZipFile(library_path, 'r') as zip_ref:
-                    file_dict = {}
-                    for member in zip_ref.namelist():
-                        if member.startswith("META-INF/") or member.endswith("/") or member.endswith("LICENSE"):
-                            continue
-                        if (os_arch == "64" and any(x in member for x in ["86", "32", "arm"])) or (
-                                os_arch == "32" and any(x in member for x in ["64", "arm"])) or (
-                                os_arch == "arm64" and any(x in member for x in ["86", "32"])):
-                            continue
-                        extract_file_path = os.path.join(extract_path, os.path.basename(member))
-                        file_dict[member] = extract_file_path
 
-                    processed_dict = {}
-                    keys_to_delete = []
-                    for member, extract_file_path in file_dict.items():
-                        if member.endswith("class"):
-                            raise Exception("错误的natives")
-                        file_name_main = re.sub(r'(x86|x64|x32|86|64|32)', '', member)
-                        file_name_main = re.sub(r'[-_]', '', file_name_main)
-                        file_name_main = re.sub(r'\.\w+$', '', file_name_main)
-                        if file_name_main in processed_dict:
-                            if len(member) > len(processed_dict[file_name_main][0]):
-                                keys_to_delete.append(processed_dict[file_name_main][0])
-                                processed_dict[file_name_main] = (member, extract_file_path)
-                        else:
-                            processed_dict[file_name_main] = (member, extract_file_path)
+                # 将同步解压操作封装到函数中
+                def sync_extract():
+                    arch_patterns = {
+                        "64": re.compile(r"(x86|i686|arm)"),
+                        "32": re.compile(r"(x64|arm64)"),
+                        "arm64": re.compile(r"(i386|x86_64)")
+                    }
+                    current_arch_pattern = arch_patterns.get(os_arch)
 
-                    for key in keys_to_delete:
-                        if key in file_dict:
-                            del file_dict[key]
-                    # 批量处理文件解压
-                    with zip_ref:
-                        for member, extract_file_path in file_dict.items():
-                            with zip_ref.open(member) as source, open(extract_file_path, "wb") as target:
+                    with zipfile.ZipFile(library_path, 'r') as zip_ref:
+                        # 生成过滤后的成员列表
+                        filtered_members = []
+                        for member in zip_ref.namelist():
+                            if any([
+                                member.startswith("META-INF/"),
+                                member.endswith("/"),
+                                member.endswith("LICENSE"),
+                                current_arch_pattern and current_arch_pattern.search(member)
+                            ]):
+                                continue
+                            filtered_members.append(member)
+
+                        # 处理文件名冲突
+                        member_map = {}
+                        for member in filtered_members:
+                            base_name = os.path.basename(member)
+                            clean_name = re.sub(r'(x86|x64|x32|86|64|32|[-_])', '', base_name)
+                            clean_name = re.sub(r'\..+$', '', clean_name)
+                            if clean_name not in member_map or len(member) > len(member_map[clean_name]):
+                                member_map[clean_name] = member
+
+                        # 执行实际解压
+                        for member in member_map.values():
+                            target_path = os.path.join(extract_path, os.path.basename(member))
+                            with zip_ref.open(member) as source, open(target_path, 'wb') as target:
                                 shutil.copyfileobj(source, target) # type:ignore
+
+                # 异步执行同步解压操作
+                await asyncio.to_thread(sync_extract)
 
     async def download_game_files(self, version_info, version, os_name, os_arch):
         libraries = version_info.get('libraries', [])
