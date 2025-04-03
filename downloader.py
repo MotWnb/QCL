@@ -8,13 +8,25 @@ import zipfile
 import aiofiles
 import aiohttp
 
-from utils import _check_rules
+from utils import _check_rules, calculate_sha1
+
 
 class DownloadClass:
     def __init__(self, session):
         self.session = session
 
-    async def download_file(self, url, dest):
+    async def download_file(self, url, dest, sha1=None):
+        if os.path.exists(dest):
+            if sha1:
+                file_sha1 = await calculate_sha1(dest)
+                if file_sha1 == sha1:
+                    return
+                else:
+                    print(f"SHA1校验失败: {dest}")
+                    os.remove(dest)
+            else:
+                os.remove(dest)
+
         retry_count = 0
         max_retries = 5
         while True:
@@ -28,7 +40,11 @@ class DownloadClass:
                             if not chunk:
                                 break
                             await file.write(chunk)
-                    break
+                    if sha1:
+                        file_sha1 = await calculate_sha1(dest)
+                        if file_sha1 != sha1:
+                            raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1}")
+                    return
             except aiohttp.ClientResponseError as e:
                 if e.status == 429:
                     # 动态调整等待时间
@@ -69,8 +85,9 @@ class DownloadClass:
                     break
 
         if artifact:
+            sha1 = artifact.get('sha1')
             library_path = f".minecraft/libraries/{artifact['path']}"
-            await self.download_file(artifact['url'], library_path)
+            await self.download_file(artifact['url'], library_path, sha1)
             need_extract = need_extract or "natives" in artifact['url']
 
             if need_extract:
@@ -117,33 +134,36 @@ class DownloadClass:
                 # 异步执行同步解压操作
                 await asyncio.to_thread(sync_extract)
 
-    async def download_game_files(self, version_info, version, os_name, os_arch):
+    async def download_libraries(self, version_info, version, os_name, os_arch):
         libraries = version_info.get('libraries', [])
-        os.makedirs(f".minecraft/versions/{version}/{version}-natives", exist_ok=True)
         tasks = [self.download_library(library, os_name, os_arch, version) for library in libraries]
         await asyncio.gather(*tasks)
 
     async def download_assets(self, version_info):
         asset_index_url = version_info.get('assetIndex', {}).get('url')
         if asset_index_url:
-            asset_index_id = version_info['assetIndex']['id']
+            asset_index_sha1 = version_info.get('assetIndex', {}).get('sha1')
+            asset_index_id = asset_index_url.split('/')[-1].split('.')[0]
             asset_index_path = f".minecraft/assets/indexes/{asset_index_id}.json"
-            await self.download_file(asset_index_url, asset_index_path)
+            await self.download_file(asset_index_url, asset_index_path, asset_index_sha1)
 
             async with aiofiles.open(asset_index_path, 'r') as file:
                 asset_index = json.loads(await file.read())
 
             tasks = []
             for asset, info in asset_index.get('objects', {}).items():
-                file_hash = info['hash']
-                asset_url = f"https://resources.download.minecraft.net/{file_hash[:2]}/{file_hash}"
-                asset_path = f".minecraft/assets/objects/{file_hash[:2]}/{file_hash}"
-                tasks.append(self.download_file(asset_url, asset_path))
+                asset_sha1 = info['hash']
+                asset_url = f"https://resources.download.minecraft.net/{asset_sha1[:2]}/{asset_sha1}"
+                asset_path = f".minecraft/assets/objects/{asset_sha1[:2]}/{asset_sha1}"
+                tasks.append(self.download_file(asset_url, asset_path, asset_sha1))
             await asyncio.gather(*tasks)
 
     async def download_version(self, version_info, version, os_name, os_arch):
-        await asyncio.gather(self.download_game_files(version_info, version, os_name, os_arch),
+        os.makedirs(f".minecraft/versions/{version}/{version}-natives", exist_ok=True)
+        core_jar_url = version_info.get('downloads', {}).get('client', {}).get('url')
+        core_jar_path = f".minecraft/versions/{version}/{version}.jar"
+        core_jar_sha1 = version_info.get('downloads', {}).get('client', {}).get('sha1')
+        await asyncio.gather(self.download_libraries(version_info, version, os_name, os_arch),
                              self.download_assets(version_info),
-                             self.download_file(version_info.get('downloads', {}).get('client', {}).get('url'),
-                                                f".minecraft/versions/{version}/{version}.jar"),
+                             self.download_file(core_jar_url, core_jar_path, core_jar_sha1),
                              self.download_log4j2(version_info, version))

@@ -1,10 +1,12 @@
 import asyncio
+import hashlib
 import logging
 import os
 import platform
 import re
 from typing import Dict, Set, List
 
+import aiofiles
 import psutil
 
 
@@ -170,3 +172,14 @@ async def get_os_info():
     if os_arch not in ["32", "64", "arm64"]:
         raise ValueError(f"不支持的操作系统架构{os_arch}")
     return os_name, os_arch
+
+async def calculate_sha1(file_path: str) -> str:
+    """异步计算文件的SHA1哈希值"""
+    sha1 = hashlib.sha1()
+    async with aiofiles.open(file_path, 'rb') as f:
+        while True:
+            chunk = await f.read(8192)
+            if not chunk:
+                break
+            sha1.update(chunk)
+    return sha1.hexdigest()

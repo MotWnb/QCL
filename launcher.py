@@ -1,6 +1,5 @@
 import asyncio
 import os
-import shlex
 import subprocess
 import sys
 from threading import Thread

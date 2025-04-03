@@ -20,6 +20,7 @@ async def main():
 
         if user_choice == "1":
             await downloader.download_file(version_manifest_url, version_manifest_path)
+
             async with aiofiles.open(version_manifest_path, 'r') as file:
                 version_manifest = json.loads(await file.read())
 
