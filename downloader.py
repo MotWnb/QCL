@@ -96,42 +96,60 @@ class DownloadClass:
 
                 # 将同步解压操作封装到函数中
                 def sync_extract():
+                    # 根据目标架构设置过滤模式
                     arch_patterns = {
-                        "64": re.compile(r"(x86|i686|arm)"),
-                        "32": re.compile(r"(x64|arm64)"),
-                        "arm64": re.compile(r"(i386|x86_64)")
+                        "x64": re.compile(r"(x86|i686|arm|aarch)"),  # 过滤32位/ARM架构文件
+                        "x86": re.compile(r"(x64|arm64|aarch64)"),  # 过滤64位/ARM64文件
+                        "arm64": re.compile(r"(i386|x86_64|amd64)")  # 过滤x86架构文件
                     }
                     current_arch_pattern = arch_patterns.get(os_arch)
 
                     with zipfile.ZipFile(library_path, 'r') as zip_ref:
-                        # 生成过滤后的成员列表
+                        # 第一轮过滤：排除不需要的文件
                         filtered_members = []
                         for member in zip_ref.namelist():
+                            # 跳过常见非必要文件
                             if any([
-                                member.startswith("META-INF/"),
-                                member.endswith("/"),
-                                member.endswith("LICENSE"),
+                                member.startswith("META-INF/"),  # 签名文件
+                                member.endswith("/"),  # 空目录
+                                "LICENSE" in member.upper(),  # 许可证文件
+                                # 架构过滤：当存在对应架构模式时检查
                                 current_arch_pattern and current_arch_pattern.search(member)
                             ]):
                                 continue
                             filtered_members.append(member)
 
-                        # 处理文件名冲突
+                        # 第二轮处理：解决文件名冲突
                         member_map = {}
                         for member in filtered_members:
                             base_name = os.path.basename(member)
-                            clean_name = re.sub(r'(x86|x64|x32|86|64|32|[-_])', '', base_name)
-                            clean_name = re.sub(r'\..+$', '', clean_name)
-                            if clean_name not in member_map or len(member) > len(member_map[clean_name]):
+                            # 生成简化文件名（去除架构标识和扩展名）
+                            clean_name = re.sub(
+                                r'-(linux|windows|macos|arm|aarch|64|32|x86|x64|arm64|v\d+)[_.-]?',
+                                '',
+                                base_name.split('.')[0]
+                            )
+                            # 保留路径最长的版本（通常为最完整的实现）
+                            if clean_name not in member_map or \
+                                    len(member.split('/')) > len(member_map[clean_name].split('/')):
                                 member_map[clean_name] = member
 
-                        # 执行实际解压
+                        # 执行解压操作
                         for member in member_map.values():
                             target_path = os.path.join(extract_path, os.path.basename(member))
-                            with zip_ref.open(member) as source, open(target_path, 'wb') as target:
+
+                            # 确保目标目录存在
+                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+                            # 二进制模式复制文件
+                            with zip_ref.open(member) as source, \
+                                    open(target_path, 'wb') as target:
                                 shutil.copyfileobj(source, target) # type:ignore
 
-                # 异步执行同步解压操作
+                            # 保留文件权限（Linux/macOS需要）
+                            if os.name != 'nt':
+                                file_info = zip_ref.getinfo(member)
+                                os.chmod(target_path, file_info.external_attr >> 16)
                 await asyncio.to_thread(sync_extract)
 
     async def download_libraries(self, version_info, version, os_name, os_arch):
