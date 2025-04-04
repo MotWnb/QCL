@@ -3,7 +3,7 @@ import os
 import subprocess
 import sys
 from threading import Thread
-from typing import Callable
+from typing import Callable, Optional
 
 from utils import get_cp, async_find_java, get_os_info, _check_rules
 
@@ -13,7 +13,7 @@ class MinecraftLauncher:
         pass
 
     @staticmethod
-    async def get_args(version_info, version):
+    async def get_args(version_info, version, version_cwd):
         # 异步获取Java安装信息
         java_task = asyncio.create_task(async_find_java())
 
@@ -104,7 +104,7 @@ class MinecraftLauncher:
             "${version_type}": version_info.get('type', 'release'),
             "${assets_root}": os.path.join(game_directory, "assets"),
             "${assets_index_name}": version_info.get('assets', 'legacy'),
-            "${game_directory}": game_directory,
+            "${game_directory}": version_cwd,
             "${auth_uuid}": auth_uuid,
             "${auth_access_token}": token,
             "${user_type}": "msa"
@@ -154,16 +154,19 @@ class MinecraftLauncher:
         return processed_command
 
     @staticmethod
-    def execute_javaw_blocking(command: list,
-                               stdout_handler: Callable[[str], None] = lambda x: print(f"[STDOUT] {x}"),
-                               stderr_handler: Callable[[str], None] = lambda x: print(f"[STDERR] {x}")
-                               ) -> int:
+    def execute_javaw_blocking(
+            command: list,
+            stdout_handler: Callable[[str], None] = lambda x: print(f"[STDOUT] {x}"),
+            stderr_handler: Callable[[str], None] = lambda x: print(f"[STDERR] {x}"),
+            cwd: Optional[str] = None  # 新增参数：控制工作目录
+    ) -> int:
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            text=True
+            text=True,
+            cwd=cwd  # 关键修改：设置子进程的工作目录
         )
 
         def stream_reader(stream, handler):
@@ -184,13 +187,13 @@ class MinecraftLauncher:
         stderr_thread.start()
 
         process.wait()
-        stdout_thread.join(timeout=1)
-        stderr_thread.join(timeout=1)
+        stdout_thread.join()
+        stderr_thread.join()
         process.stdout.close()
         process.stderr.close()
         return process.returncode
 
-    async def launcher(self, version_info, version):
-        args = await self.get_args(version_info, version)
-        exit_code = self.execute_javaw_blocking(args)
+    async def launcher(self, version_info, version, version_cwd):
+        args = await self.get_args(version_info, version, version_cwd)
+        exit_code = self.execute_javaw_blocking(args, cwd=version_cwd)
         print(f"进程退出码: {exit_code}")

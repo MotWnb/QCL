@@ -48,10 +48,12 @@ async def main():
             versions = os.listdir(".minecraft/versions")
             version = input(f"请输入要启动的版本: {versions}\n")
             version_info_path = f".minecraft/versions/{version}/{version}.json"
+            version_cwd = f".minecraft/versions/{version}"
+            version_cwd = os.path.abspath(version_cwd)
             async with aiofiles.open(version_info_path, 'r') as file:
                 version_info = json.loads(await file.read())
             launcher = MinecraftLauncher()
-            await launcher.launcher(version_info, version)
+            await launcher.launcher(version_info, version, version_cwd)
 
 if __name__ == "__main__":
     asyncio.run(main())

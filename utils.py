@@ -66,8 +66,9 @@ async def get_cp(version_info, version, os_name, os_arch):
                 info = classifiers[native_classifier]
                 lib_path = f".minecraft/libraries/{info['path']};"
                 cp += os.path.abspath(lib_path)
-
-    cp += f".minecraft/versions/{version}/{version}.jar"
+    main_jar_path = f".minecraft/versions/{version}/{version}.jar"
+    main_jar_path = os.path.abspath(main_jar_path)
+    cp += main_jar_path
     return f'"{cp}"'
 
 
