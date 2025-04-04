@@ -29,7 +29,7 @@ class MinecraftLauncher:
         os_arch = f"x{raw_arch}" if raw_arch in ["86", "64"] else raw_arch  # 转换为x86/x64/arm64
 
         # 异步获取类路径和Java信息
-        cp_task = asyncio.create_task(get_cp(version_info, version, os_name))
+        cp_task = asyncio.create_task(get_cp(version_info, version, os_name, os_arch))
 
         # 处理游戏参数
         game_args = []

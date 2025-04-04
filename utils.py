@@ -41,23 +41,34 @@ def _check_rules(element, os_name, os_arch=None, features=None):
     return False  # 无匹配规则，默认拒绝
 
 
-async def get_cp(version_info, version, os_name):
+async def get_cp(version_info, version, os_name, os_arch):
     cp = ""
     for library in version_info.get('libraries', []):
+        if not _check_rules(library, os_name):
+            continue
+
+        # 处理主 artifact
         artifact = library.get('downloads', {}).get('artifact')
-        if artifact and _check_rules(library, os_name):
+        if artifact:
             lib_path = f".minecraft/libraries/{artifact['path']};"
-            lib_path = os.path.abspath(lib_path)
-            cp += lib_path
+            cp += os.path.abspath(lib_path)
+
+        # 处理 classifier（natives）
         classifiers = library.get('downloads', {}).get('classifiers')
         if classifiers:
-            for native in classifiers:
-                lib_path = f".minecraft/libraries/{classifiers[native]['path']};"
-                lib_path = os.path.abspath(lib_path)
-                cp += lib_path
+            natives = library.get("natives", {})
+            if os_name in natives:
+                native_classifier = natives[os_name].replace("${arch}", os_arch)
+            else:
+                native_classifier = f"natives-{os_name}"
+
+            if native_classifier in classifiers:
+                info = classifiers[native_classifier]
+                lib_path = f".minecraft/libraries/{info['path']};"
+                cp += os.path.abspath(lib_path)
+
     cp += f".minecraft/versions/{version}/{version}.jar"
-    cp = f'"{cp}"'
-    return cp
+    return f'"{cp}"'
 
 
 async def async_find_java() -> Dict[str, str]:
