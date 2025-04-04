@@ -70,7 +70,7 @@ async def get_cp(version_info, version, os_name):
 async def async_find_java() -> Dict[str, str]:
     java_executables = ("javaw.exe", "java.exe")
     keywords = {"java", "jdk", "jre", "oracle", "minecraft", "runtime"}
-    ignore_dirs = {"windows", "program files", "system32", "temp"}
+    ignore_dirs = {"windows", "system32", "temp"}
     scanned_paths: Set[str] = set()
     java_versions: Dict[str, str] = {}
 
