@@ -143,14 +143,15 @@ class MinecraftLauncher:
         if log4j_arg.strip():
             command.append(log4j_arg.strip())
 
-        # 应用变量替换
-        final_command = " ".join(command)
-        for key, value in replacements.items():
-            final_command = final_command.replace(key, f'"{value}"' if " " in value else value)
+        processed_command = []
+        for part in command:
+            for key, value in replacements.items():
+                part = part.replace(key, value)
+            processed_command.append(part)
 
         print("\n最终启动命令：")
-        print(final_command)
-        return final_command
+        print(" ".join(processed_command))
+        return processed_command
 
     @staticmethod
     def execute_javaw_blocking(command: list,
