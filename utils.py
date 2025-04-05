@@ -9,6 +9,8 @@ from typing import Dict, Set, List
 import aiofiles
 import psutil
 
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def _check_rules(element, os_name, os_arch=None, features=None):
     rules = element.get("rules", [])
@@ -172,11 +174,13 @@ async def async_find_java() -> Dict[str, str]:
 async def get_os_info():
     os_name = platform.system().lower()
     if os_name not in ["windows", "linux", "darwin"]:
+        logging.error(f"不支持的操作系统{os_name}")
         raise ValueError(f"不支持的操作系统{os_name}")
     if os_name == "darwin":
         os_name = "osx"
     os_arch = platform.architecture()[0].replace("bit", "")
     if os_arch not in ["32", "64", "arm64"]:
+        logging.error(f"不支持的操作系统架构{os_arch}")
         raise ValueError(f"不支持的操作系统架构{os_arch}")
     return os_name, os_arch
 
@@ -191,3 +195,4 @@ async def calculate_sha1(file_path: str) -> str:
                 break
             sha1.update(chunk)
     return sha1.hexdigest()
+    

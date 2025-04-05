@@ -4,9 +4,12 @@ import subprocess
 import sys
 from threading import Thread
 from typing import Callable, Optional
+import logging
 
 from utils import get_cp, async_find_java, get_os_info, _check_rules
 
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class MinecraftLauncher:
     def __init__(self):
@@ -57,6 +60,7 @@ class MinecraftLauncher:
                     else:
                         game_args.append(str(value))
             else:
+                logging.error(f"非法参数类型: {type(arg)}")
                 raise ValueError(f"非法参数类型: {type(arg)}")
 
         # 处理JVM参数
@@ -72,10 +76,10 @@ class MinecraftLauncher:
                     else:
                         java_args.append(str(value))
             else:
+                logging.error(f"非法参数类型: {type(arg)}")
                 raise ValueError(f"非法参数类型: {type(arg)}")
 
         # 确保包含必要的JVM参数
-        '''-XX:+UseG1GC -XX:-UseAdaptiveSizePolicy -XX:-OmitStackTraceInFastThrow -Djdk.lang.Process.allowAmbiguousCommands=true -Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True -Dlog4j2.formatMsgNoLookups=true'''
         required_jvm_args = [
             "-XX:+UseG1GC",
             "-XX:-UseAdaptiveSizePolicy",
@@ -83,12 +87,11 @@ class MinecraftLauncher:
             "-Djdk.lang.Process.allowAmbiguousCommands=true",
             "-Dfml.ignoreInvalidMinecraftCertificates=True",
             "-Dfml.ignorePatchDiscrepancies=True",
-            "-Dlog4j2.formatMsgNoLookups=true"
+            "-Dlog4j2.formatMsgNoLookups=true",
             "-Djava.library.path=${natives_directory}",
             "-Djna.tmpdir=${natives_directory}",
             "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
             "-Dio.netty.native.workdir=${natives_directory}"
-
         ]
         for arg in required_jvm_args:
             if arg not in java_args:
@@ -124,28 +127,28 @@ class MinecraftLauncher:
 
         # 选择Java版本
         required_java_version = str(version_info.get('javaVersion', {}).get("majorVersion", "21"))
-        print(f"\n需要的Java版本: {required_java_version}")
-        print("检测到的Java安装：")
+        logging.info(f"需要的Java版本: {required_java_version}")
+        logging.info("检测到的Java安装：")
 
         java_path = ""
         for path, ver in java_map.items():
-            print(f"  {ver.ljust(10)} : {path}")
+            logging.info(f"  {ver.ljust(10)} : {path}")
             # 精确版本匹配逻辑
             if ver.replace("Java", "").strip() == required_java_version:
                 java_exe = "javaw.exe" if os_name == "windows" else "java"
                 candidate_path = os.path.join(path, java_exe)
                 if os.path.exists(candidate_path):
                     java_path = candidate_path
-                    print(f"√ 使用匹配的Java: {java_path}")
+                    logging.info(f"使用匹配的Java: {java_path}")
                     break
 
         # Java未找到的容错处理
         if not java_path:
-            print("⚠ 警告：未找到精确匹配的Java，尝试使用最新版本")
+            logging.warning("警告：未找到精确匹配的Java，尝试使用最新版本")
             latest_java = max(java_map.items(), key=lambda x: x[1], default=None)
             if latest_java:
                 java_path = os.path.join(latest_java[0], "javaw.exe" if os_name == "windows" else "java")
-                print(f"使用最新Java: {java_path}")
+                logging.info(f"使用最新Java: {java_path}")
 
         # 构建最终命令
         command = [java_path]
@@ -161,15 +164,14 @@ class MinecraftLauncher:
                 part = part.replace(key, value)
             processed_command.append(part)
 
-        print("\n最终启动命令：")
-        print(" ".join(processed_command))
+        logging.debug("最终启动命令：" + " ".join(processed_command))
         return processed_command
 
     @staticmethod
     def execute_javaw_blocking(
             command: list,
-            stdout_handler: Callable[[str], None] = lambda x: print(f"[STDOUT] {x}"),
-            stderr_handler: Callable[[str], None] = lambda x: print(f"[STDERR] {x}"),
+            stdout_handler: Callable[[str], None] = lambda x: logging.info(f"[STDOUT] {x}"),
+            stderr_handler: Callable[[str], None] = lambda x: logging.error(f"[STDERR] {x}"),
             cwd: Optional[str] = None  # 新增参数：控制工作目录
     ) -> int:
         process = subprocess.Popen(
@@ -189,7 +191,7 @@ class MinecraftLauncher:
                         break
                     handler(line.rstrip())
                 except Exception as e:
-                    print(f"流读取错误: {e}")
+                    logging.error(f"流读取错误: {e}")
 
         stdout_thread = Thread(target=stream_reader, args=(process.stdout, stdout_handler))
         stderr_thread = Thread(target=stream_reader, args=(process.stderr, stderr_handler))
@@ -208,4 +210,5 @@ class MinecraftLauncher:
     async def launcher(self, version_info, version, version_cwd, version_isolation_enabled):
         args = await self.get_args(version_info, version, version_isolation_enabled)
         exit_code = self.execute_javaw_blocking(args, cwd=version_cwd)
-        print(f"进程退出码: {exit_code}")
+        logging.info(f"进程退出码: {exit_code}")
+    

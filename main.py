@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import logging
 
 import aiofiles
 import aiohttp
@@ -9,6 +10,8 @@ from utils import get_os_info
 from downloader import DownloadClass
 from launcher import MinecraftLauncher
 
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 async def main():
     os_name, os_arch = await get_os_info()
@@ -20,6 +23,7 @@ async def main():
         downloader = DownloadClass(session)
 
         if user_choice == "1":
+            logging.info("开始下载版本清单")
             await downloader.download_file(version_manifest_url, version_manifest_path)
 
             async with aiofiles.open(version_manifest_path, 'r') as file:
@@ -29,21 +33,23 @@ async def main():
             latest_snapshot = version_manifest['latest']['snapshot']
             versions = {version['id']: version['url'] for version in version_manifest['versions']}
 
-            print(f"最新发布版本: {latest_release}")
-            print(f"最新快照版本: {latest_snapshot}")
+            logging.info(f"最新发布版本: {latest_release}")
+            logging.info(f"最新快照版本: {latest_snapshot}")
 
             selected_version = input("请输入要下载的版本: ")
             if selected_version not in versions:
-                print("无效的版本号")
+                logging.error("无效的版本号")
                 return
 
             version_info_url = versions[selected_version]
             version_info_path = f".minecraft/versions/{selected_version}/{selected_version}.json"
+            logging.info(f"开始下载版本 {selected_version} 的信息")
             await downloader.download_file(version_info_url, version_info_path)
 
             async with aiofiles.open(version_info_path, 'r') as file:
                 version_info = json.loads(await file.read())
 
+            logging.info(f"开始下载版本 {selected_version} 的所有文件")
             await downloader.download_version(version_info, selected_version, os_name, os_arch)
         elif user_choice == "2":
             versions = os.listdir(".minecraft/versions")
@@ -66,8 +72,10 @@ async def main():
             async with aiofiles.open(version_info_path, 'r') as file:
                 version_info = json.loads(await file.read())
             launcher = MinecraftLauncher()
+            logging.info(f"开始启动版本 {version}")
             await launcher.launcher(version_info, version, version_cwd, version_isolation)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+    

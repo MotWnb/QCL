@@ -4,12 +4,15 @@ import os
 import re
 import shutil
 import zipfile
+import logging
 
 import aiofiles
 import aiohttp
 
 from utils import _check_rules, calculate_sha1
 
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DownloadClass:
     def __init__(self, session):
@@ -22,7 +25,7 @@ class DownloadClass:
                 if file_sha1 == sha1:
                     return
                 else:
-                    print(f"SHA1校验失败: {dest}")
+                    logging.error(f"SHA1校验失败: {dest}")
                     os.remove(dest)
             else:
                 os.remove(dest)
@@ -44,18 +47,20 @@ class DownloadClass:
                         file_sha1 = await calculate_sha1(dest)
                         if file_sha1 != sha1:
                             raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1}")
+                    logging.debug(f"文件下载成功: {dest}")
                     return
             except aiohttp.ClientResponseError as e:
                 if e.status == 429:
                     # 动态调整等待时间
                     wait_time = min(2 ** retry_count, 30)
+                    logging.warning(f"收到429错误，等待 {wait_time} 秒后重试: {url}")
                     await asyncio.sleep(wait_time)
                     retry_count += 1
                     if retry_count > max_retries:
-                        print(f"Max retries reached for {url}, {dest}")
+                        logging.error(f"{dest}下载失败，已达到最大重试次数 {max_retries}")
                         raise e
                 else:
-                    print(f"Error downloading file: {url}, {dest}")
+                    logging.error(f"下载失败: {url}")
                     raise e
 
     async def download_log4j2(self, version_info, version):
@@ -87,8 +92,9 @@ class DownloadClass:
         if artifact:
             sha1 = artifact.get('sha1')
             library_path = f".minecraft/libraries/{artifact['path']}"
-            await self.download_file(artifact['url'], library_path, sha1)
-            need_extract = need_extract or "natives" in artifact['url']
+            library_url = artifact.get('url').replace("https://libraries.minecraft.net", "https://bmclapi2.bangbang93.com/maven")
+            await self.download_file(library_url, library_path, sha1)
+            need_extract = need_extract or "natives" in library_url
 
             if need_extract:
                 extract_path = f".minecraft/versions/{version}/{version}-natives"
@@ -144,13 +150,15 @@ class DownloadClass:
                             # 二进制模式复制文件
                             with zip_ref.open(member) as source, \
                                     open(target_path, 'wb') as target:
-                                shutil.copyfileobj(source, target) # type:ignore
+                                shutil.copyfileobj(source, target)  # type:ignore
 
                             # 保留文件权限（Linux/macOS需要）
                             if os.name != 'nt':
                                 file_info = zip_ref.getinfo(member)
                                 os.chmod(target_path, file_info.external_attr >> 16)
+                logging.debug(f"开始解压文件: {library_path} 到 {extract_path}")
                 await asyncio.to_thread(sync_extract)
+                logging.debug(f"文件解压完成: {library_path} 到 {extract_path}")
 
     async def download_libraries(self, version_info, version, os_name, os_arch):
         libraries = version_info.get('libraries', [])
@@ -158,7 +166,7 @@ class DownloadClass:
         await asyncio.gather(*tasks)
 
     async def download_assets(self, version_info):
-        asset_index_url = version_info.get('assetIndex', {}).get('url')
+        asset_index_url = version_info.get('assetIndex', {}).get('url').replace('http://resources.download.minecraft.net', 'https://bmclapi2.bangbang93.com/assets')
         if asset_index_url:
             asset_index_sha1 = version_info.get('assetIndex', {}).get('sha1')
             asset_index_id = asset_index_url.split('/')[-1].split('.')[0]
@@ -185,3 +193,4 @@ class DownloadClass:
                              self.download_assets(version_info),
                              self.download_file(core_jar_url, core_jar_path, core_jar_sha1),
                              self.download_log4j2(version_info, version))
+    
