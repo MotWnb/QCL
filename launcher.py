@@ -13,7 +13,7 @@ class MinecraftLauncher:
         pass
 
     @staticmethod
-    async def get_args(version_info, version, version_cwd):
+    async def get_args(version_info, version, version_isolation_enabled):
         # 异步获取Java安装信息
         java_task = asyncio.create_task(async_find_java())
 
@@ -28,8 +28,16 @@ class MinecraftLauncher:
         # 处理架构命名规范
         os_arch = f"x{raw_arch}" if raw_arch in ["86", "64"] else raw_arch  # 转换为x86/x64/arm64
 
+        # 新增路径计算
+        original_game_directory = os.path.abspath(".minecraft")
+        version_directory = os.path.join(original_game_directory, "versions", version)
+        natives_directory = os.path.join(original_game_directory, "versions", version, f"{version}-natives")
+
+        # 根据版本隔离状态设置game_directory
+        game_directory = version_directory if version_isolation_enabled else original_game_directory
+
         # 异步获取类路径和Java信息
-        cp_task = asyncio.create_task(get_cp(version_info, version, os_name, os_arch))
+        cp_task = asyncio.create_task(get_cp(version_info, version, os_name, os_arch, version_directory))
 
         # 处理游戏参数
         game_args = []
@@ -67,11 +75,20 @@ class MinecraftLauncher:
                 raise ValueError(f"非法参数类型: {type(arg)}")
 
         # 确保包含必要的JVM参数
+        '''-XX:+UseG1GC -XX:-UseAdaptiveSizePolicy -XX:-OmitStackTraceInFastThrow -Djdk.lang.Process.allowAmbiguousCommands=true -Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True -Dlog4j2.formatMsgNoLookups=true'''
         required_jvm_args = [
+            "-XX:+UseG1GC",
+            "-XX:-UseAdaptiveSizePolicy",
+            "-XX:-OmitStackTraceInFastThrow",
+            "-Djdk.lang.Process.allowAmbiguousCommands=true",
+            "-Dfml.ignoreInvalidMinecraftCertificates=True",
+            "-Dfml.ignorePatchDiscrepancies=True",
+            "-Dlog4j2.formatMsgNoLookups=true"
             "-Djava.library.path=${natives_directory}",
             "-Djna.tmpdir=${natives_directory}",
             "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
             "-Dio.netty.native.workdir=${natives_directory}"
+
         ]
         for arg in required_jvm_args:
             if arg not in java_args:
@@ -80,11 +97,6 @@ class MinecraftLauncher:
         # 等待异步任务完成
         java_map = await java_task
         cp = await cp_task
-
-        # 构建路径变量
-        game_directory = os.path.abspath(".minecraft")
-        natives_directory = os.path.join(game_directory, "versions", version, f"{version}-natives")
-        version_directory = os.path.join(game_directory, "versions", version)
 
         # 日志配置处理
         log_config = version_info.get('logging', {}).get('client', {})
@@ -102,9 +114,9 @@ class MinecraftLauncher:
             "${launcher_version}": "1.0",
             "${version_name}": version,
             "${version_type}": version_info.get('type', 'release'),
-            "${assets_root}": os.path.join(game_directory, "assets"),
+            "${assets_root}": os.path.join(original_game_directory, "assets"),
             "${assets_index_name}": version_info.get('assets', 'legacy'),
-            "${game_directory}": version_cwd,
+            "${game_directory}": game_directory,
             "${auth_uuid}": auth_uuid,
             "${auth_access_token}": token,
             "${user_type}": "msa"
@@ -193,7 +205,7 @@ class MinecraftLauncher:
         process.stderr.close()
         return process.returncode
 
-    async def launcher(self, version_info, version, version_cwd):
-        args = await self.get_args(version_info, version, version_cwd)
+    async def launcher(self, version_info, version, version_cwd, version_isolation_enabled):
+        args = await self.get_args(version_info, version, version_isolation_enabled)
         exit_code = self.execute_javaw_blocking(args, cwd=version_cwd)
         print(f"进程退出码: {exit_code}")

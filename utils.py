@@ -41,7 +41,7 @@ def _check_rules(element, os_name, os_arch=None, features=None):
     return False  # 无匹配规则，默认拒绝
 
 
-async def get_cp(version_info, version, os_name, os_arch):
+async def get_cp(version_info, version, os_name, os_arch, version_directory):
     cp = ""
     for library in version_info.get('libraries', []):
         if not _check_rules(library, os_name):
@@ -66,7 +66,9 @@ async def get_cp(version_info, version, os_name, os_arch):
                 info = classifiers[native_classifier]
                 lib_path = f".minecraft/libraries/{info['path']};"
                 cp += os.path.abspath(lib_path)
-    main_jar_path = f".minecraft/versions/{version}/{version}.jar"
+
+    # 使用传入的version_directory构建路径
+    main_jar_path = os.path.join(version_directory, f"{version}.jar")
     main_jar_path = os.path.abspath(main_jar_path)
     cp += main_jar_path
     return f'"{cp}"'
@@ -177,6 +179,7 @@ async def get_os_info():
     if os_arch not in ["32", "64", "arm64"]:
         raise ValueError(f"不支持的操作系统架构{os_arch}")
     return os_name, os_arch
+
 
 async def calculate_sha1(file_path: str) -> str:
     """异步计算文件的SHA1哈希值"""

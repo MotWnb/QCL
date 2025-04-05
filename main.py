@@ -9,6 +9,7 @@ from utils import get_os_info
 from downloader import DownloadClass
 from launcher import MinecraftLauncher
 
+
 async def main():
     os_name, os_arch = await get_os_info()
     user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n")
@@ -48,12 +49,25 @@ async def main():
             versions = os.listdir(".minecraft/versions")
             version = input(f"请输入要启动的版本: {versions}\n")
             version_info_path = f".minecraft/versions/{version}/{version}.json"
-            version_cwd = f".minecraft/versions/{version}"
-            version_cwd = os.path.abspath(version_cwd)
+            original_game_directory = os.path.abspath(".minecraft")
+            version_directory = os.path.join(original_game_directory, "versions", version)
+
+            # 新增版本隔离选择
+            version_isolation = input("是否开启版本隔离？(y/n): ").strip().lower() == 'y'
+            if version_isolation:
+                version_cwd = os.path.abspath(version_directory)
+            else:
+                # 获取QCL目录路径
+                qcl_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "QCL")
+                # 如果QCL目录不存在，则创建它
+                os.makedirs(qcl_dir, exist_ok=True)
+                version_cwd = qcl_dir
+
             async with aiofiles.open(version_info_path, 'r') as file:
                 version_info = json.loads(await file.read())
             launcher = MinecraftLauncher()
-            await launcher.launcher(version_info, version, version_cwd)
+            await launcher.launcher(version_info, version, version_cwd, version_isolation)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
