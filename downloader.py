@@ -11,6 +11,10 @@ import aiohttp
 
 from utils import _check_rules, calculate_sha1
 
+# 读取配置文件
+with open('config.json', 'r') as f:
+    config = json.load(f)
+
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -66,7 +70,9 @@ class DownloadClass:
     async def download_log4j2(self, version_info, version):
         if 'logging' in version_info:
             log4j2_url = version_info['logging']['client']['file']['url']
-            log4j2_path = f".minecraft/versions/{version}/log4j2.xml"
+            if config['use_mirror']:
+                log4j2_url = log4j2_url.replace("https://resources.download.minecraft.net", config['bmclapi_base_url'] + "/assets")
+            log4j2_path = os.path.join(config['minecraft_base_dir'], 'versions', version, 'log4j2.xml')
             await self.download_file(log4j2_url, log4j2_path)
 
     async def download_library(self, library, os_name, os_arch, version):
@@ -91,13 +97,15 @@ class DownloadClass:
 
         if artifact:
             sha1 = artifact.get('sha1')
-            library_path = f".minecraft/libraries/{artifact['path']}"
-            library_url = artifact.get('url').replace("https://libraries.minecraft.net", "https://bmclapi2.bangbang93.com/maven")
+            library_path = os.path.join(config['minecraft_base_dir'], 'libraries', artifact['path'])
+            library_url = artifact.get('url')
+            if config['use_mirror']:
+                library_url = library_url.replace("https://libraries.minecraft.net", config['bmclapi_base_url'] + "/maven")
             await self.download_file(library_url, library_path, sha1)
             need_extract = need_extract or "natives" in library_url
 
             if need_extract:
-                extract_path = f".minecraft/versions/{version}/{version}-natives"
+                extract_path = os.path.join(config['minecraft_base_dir'], 'versions', version, f"{version}-natives")
                 os.makedirs(extract_path, exist_ok=True)
 
                 # 将同步解压操作封装到函数中
@@ -166,11 +174,13 @@ class DownloadClass:
         await asyncio.gather(*tasks)
 
     async def download_assets(self, version_info):
-        asset_index_url = version_info.get('assetIndex', {}).get('url').replace('http://resources.download.minecraft.net', 'https://bmclapi2.bangbang93.com/assets')
+        asset_index_url = version_info.get('assetIndex', {}).get('url')
+        if config['use_mirror']:
+            asset_index_url = asset_index_url.replace(config['resource_download_base_url'], config['bmclapi_base_url'] + '/assets')
         if asset_index_url:
             asset_index_sha1 = version_info.get('assetIndex', {}).get('sha1')
             asset_index_id = asset_index_url.split('/')[-1].split('.')[0]
-            asset_index_path = f".minecraft/assets/indexes/{asset_index_id}.json"
+            asset_index_path = os.path.join(config['minecraft_base_dir'], 'assets', 'indexes', f"{asset_index_id}.json")
             await self.download_file(asset_index_url, asset_index_path, asset_index_sha1)
 
             async with aiofiles.open(asset_index_path, 'r') as file:
@@ -179,16 +189,20 @@ class DownloadClass:
             tasks = []
             for asset, info in asset_index.get('objects', {}).items():
                 asset_sha1 = info['hash']
-                asset_url = f"https://resources.download.minecraft.net/{asset_sha1[:2]}/{asset_sha1}"
-                asset_path = f".minecraft/assets/objects/{asset_sha1[:2]}/{asset_sha1}"
+                asset_url = f"{config['resource_download_base_url']}/{asset_sha1[:2]}/{asset_sha1}"
+                if config['use_mirror']:
+                    asset_url = asset_url.replace(config['resource_download_base_url'], config['bmclapi_base_url'] + '/assets')
+                asset_path = os.path.join(config['minecraft_base_dir'], 'assets', 'objects', asset_sha1[:2], asset_sha1)
                 tasks.append(self.download_file(asset_url, asset_path, asset_sha1))
             await asyncio.gather(*tasks)
 
     async def download_version(self, version_info, version, os_name, os_arch):
-        os.makedirs(f".minecraft/versions/{version}/{version}-natives", exist_ok=True)
+        os.makedirs(os.path.join(config['minecraft_base_dir'], 'versions', version, f"{version}-natives"), exist_ok=True)
         core_jar_url = version_info.get('downloads', {}).get('client', {}).get('url')
-        core_jar_path = f".minecraft/versions/{version}/{version}.jar"
+        core_jar_path = os.path.join(config['minecraft_base_dir'], 'versions', version, f"{version}.jar")
         core_jar_sha1 = version_info.get('downloads', {}).get('client', {}).get('sha1')
+        if config['use_mirror']:
+            core_jar_url = core_jar_url.replace("https://launcher.mojang.com", config['bmclapi_base_url'])
         await asyncio.gather(self.download_libraries(version_info, version, os_name, os_arch),
                              self.download_assets(version_info),
                              self.download_file(core_jar_url, core_jar_path, core_jar_sha1),

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -7,6 +8,10 @@ from typing import Callable, Optional
 import logging
 
 from utils import get_cp, async_find_java, get_os_info, _check_rules
+
+# 读取配置文件
+with open('config.json', 'r') as f:
+    config = json.load(f)
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,7 +37,7 @@ class MinecraftLauncher:
         os_arch = f"x{raw_arch}" if raw_arch in ["86", "64"] else raw_arch  # 转换为x86/x64/arm64
 
         # 新增路径计算
-        original_game_directory = os.path.abspath(".minecraft")
+        original_game_directory = os.path.abspath(config['minecraft_base_dir'])
         version_directory = os.path.join(original_game_directory, "versions", version)
         natives_directory = os.path.join(original_game_directory, "versions", version, f"{version}-natives")
 
