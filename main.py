@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import logging
 
 import aiofiles
 import aiohttp
@@ -10,12 +9,12 @@ from utils import get_os_info
 from downloader import DownloadClass
 from launcher import MinecraftLauncher
 
+from log_manager import logger as logging
+
 # 读取配置文件
 with open('config.json', 'r') as f:
     config = json.load(f)
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 async def save_config(config):
     with open('config.json', 'w') as f:

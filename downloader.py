@@ -4,25 +4,26 @@ import os
 import re
 import shutil
 import zipfile
-import logging
 
 import aiofiles
 import aiohttp
 
 from utils import _check_rules, calculate_sha1
+from log_manager import logger as logging
 
 # 读取配置文件
 with open('config.json', 'r') as f:
     config = json.load(f)
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 移除原有的日志配置
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DownloadClass:
     def __init__(self, session):
         self.session = session
 
     async def download_file(self, url, dest, sha1=None):
+        logging.debug(f"开始下载文件: {url}")
         if os.path.exists(dest):
             if sha1:
                 file_sha1 = await calculate_sha1(dest)
@@ -97,7 +98,7 @@ class DownloadClass:
 
         if artifact:
             sha1 = artifact.get('sha1')
-            library_path = os.path.join(config['minecraft_base_dir'], 'libraries', artifact['path'])
+            library_path = str(os.path.join(config['minecraft_base_dir'], 'libraries', artifact['path']))
             library_url = artifact.get('url')
             if config['use_mirror']:
                 library_url = library_url.replace("https://libraries.minecraft.net", config['bmclapi_base_url'] + "/maven")
@@ -105,7 +106,7 @@ class DownloadClass:
             need_extract = need_extract or "natives" in library_url
 
             if need_extract:
-                extract_path = os.path.join(config['minecraft_base_dir'], 'versions', version, f"{version}-natives")
+                extract_path = str(os.path.join(config['minecraft_base_dir'], 'versions', version, f"{version}-natives"))
                 os.makedirs(extract_path, exist_ok=True)
 
                 # 将同步解压操作封装到函数中

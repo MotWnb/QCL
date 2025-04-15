@@ -1,7 +1,6 @@
 import asyncio
 import hashlib
 import json
-import logging
 import os
 import platform
 import re
@@ -10,12 +9,12 @@ from typing import Dict, Set, List
 import aiofiles
 import psutil
 
+from log_manager import logger as logging
+
 # 读取配置文件
 with open('config.json', 'r') as f:
     config = json.load(f)
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def _check_rules(element, os_name, os_arch=None, features=None):
     rules = element.get("rules", [])
@@ -57,7 +56,7 @@ async def get_cp(version_info, version, os_name, os_arch, version_directory):
         # 处理主 artifact
         artifact = library.get('downloads', {}).get('artifact')
         if artifact:
-            lib_path = os.path.join(config['minecraft_base_dir'], 'libraries', artifact['path']) + ';'
+            lib_path = str(os.path.join(config['minecraft_base_dir'], 'libraries', artifact['path']) + ';')
             cp += os.path.abspath(lib_path)
 
         # 处理 classifier（natives）
@@ -71,7 +70,7 @@ async def get_cp(version_info, version, os_name, os_arch, version_directory):
 
             if native_classifier in classifiers:
                 info = classifiers[native_classifier]
-                lib_path = os.path.join(config['minecraft_base_dir'], 'libraries', info['path']) + ';'
+                lib_path = str(os.path.join(config['minecraft_base_dir'], 'libraries', info['path']) + ';')
                 cp += os.path.abspath(lib_path)
 
     # 使用传入的version_directory构建路径

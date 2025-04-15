@@ -5,16 +5,14 @@ import subprocess
 import sys
 from threading import Thread
 from typing import Callable, Optional
-import logging
+
+from log_manager import logger as logging
 
 from utils import get_cp, async_find_java, get_os_info, _check_rules
 
 # 读取配置文件
 with open('config.json', 'r') as f:
     config = json.load(f)
-
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class MinecraftLauncher:
     def __init__(self):
@@ -38,7 +36,7 @@ class MinecraftLauncher:
 
         # 新增路径计算
         original_game_directory = os.path.abspath(config['minecraft_base_dir'])
-        version_directory = os.path.join(original_game_directory, "versions", version)
+        version_directory = str(os.path.join(original_game_directory, "versions", version))
         natives_directory = os.path.join(original_game_directory, "versions", version, f"{version}-natives")
 
         # 根据版本隔离状态设置game_directory
@@ -96,7 +94,8 @@ class MinecraftLauncher:
             "-Djava.library.path=${natives_directory}",
             "-Djna.tmpdir=${natives_directory}",
             "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
-            "-Dio.netty.native.workdir=${natives_directory}"
+            "-Dio.netty.native.workdir=${natives_directory}",
+            "-cp ${classpath}"
         ]
         for arg in required_jvm_args:
             if arg not in java_args:
@@ -216,4 +215,3 @@ class MinecraftLauncher:
         args = await self.get_args(version_info, version, version_isolation_enabled)
         exit_code = self.execute_javaw_blocking(args, cwd=version_cwd)
         logging.info(f"进程退出码: {exit_code}")
-    
