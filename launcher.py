@@ -65,7 +65,9 @@ class MinecraftLauncher:
             else:
                 logging.error(f"非法参数类型: {type(arg)}")
                 raise ValueError(f"非法参数类型: {type(arg)}")
-
+        minecraftArguments = version_info.get('minecraftArguments', '')
+        if minecraftArguments:
+            game_args.append(minecraftArguments)
         # 处理JVM参数
         java_args = []
         for arg in version_info.get('arguments', {}).get('jvm', []):
@@ -81,7 +83,6 @@ class MinecraftLauncher:
             else:
                 logging.error(f"非法参数类型: {type(arg)}")
                 raise ValueError(f"非法参数类型: {type(arg)}")
-
         # 确保包含必要的JVM参数
         required_jvm_args = [
             "-XX:+UseG1GC",
