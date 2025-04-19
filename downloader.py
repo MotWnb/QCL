@@ -51,7 +51,7 @@ class DownloadClass:
                     if sha1:
                         file_sha1 = await calculate_sha1(dest)
                         if file_sha1 != sha1:
-                            raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1}")
+                            raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
                     logging.debug(f"文件下载成功: {dest}")
                     return
             except aiohttp.ClientResponseError as e:
@@ -180,7 +180,7 @@ class DownloadClass:
             asset_index_url = asset_index_url.replace(config['resource_download_base_url'], config['bmclapi_base_url'] + '/assets')
         if asset_index_url:
             asset_index_sha1 = version_info.get('assetIndex', {}).get('sha1')
-            asset_index_id = asset_index_url.split('/')[-1].split('.')[0]
+            asset_index_id = version_info.get('assets', '')
             asset_index_path = os.path.join(config['minecraft_base_dir'], 'assets', 'indexes', f"{asset_index_id}.json")
             await self.download_file(asset_index_url, asset_index_path, asset_index_sha1)
 

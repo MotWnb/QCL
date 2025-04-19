@@ -175,12 +175,25 @@ class MinecraftLauncher:
     @staticmethod
     def execute_javaw_blocking(
             command: list,
-            stdout_handler: Callable[[str], None] = lambda x: logging.info(f"[STDOUT] {x}"),
-            stderr_handler: Callable[[str], None] = lambda x: logging.error(f"[STDERR] {x}"),
+            stdout_handler: Callable[[str], None] = lambda x: print(f"[STDOUT] {x}"),
+            stderr_handler: Callable[[str], None] = lambda x: print(f"[STDERR] {x}"),
             cwd: Optional[str] = None  # 新增参数：控制工作目录
     ) -> int:
+        # 创建 QCL 目录（如果不存在）
+        qcl_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "QCL")
+        os.makedirs(qcl_dir, exist_ok=True)
+
+        # 生成批处理文件路径
+        bat_file_path = os.path.join(qcl_dir, "latest_start.bat")
+
+        # 将命令写入批处理文件
+        with open(bat_file_path, 'w', encoding='utf-8') as f:
+            f.write("@echo off\n")
+            f.write(" ".join(command))
+
+        # 执行批处理文件
         process = subprocess.Popen(
-            command,
+            bat_file_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
@@ -196,7 +209,7 @@ class MinecraftLauncher:
                         break
                     handler(line.rstrip())
                 except Exception as e:
-                    logging.error(f"流读取错误: {e}")
+                    print(f"流读取错误: {e}")
 
         stdout_thread = Thread(target=stream_reader, args=(process.stdout, stdout_handler))
         stderr_thread = Thread(target=stream_reader, args=(process.stderr, stderr_handler))
