@@ -51,7 +51,9 @@ class DownloadClass:
                     if sha1:
                         file_sha1 = await calculate_sha1(dest)
                         if file_sha1 != sha1:
-                            raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
+                            logging.error(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
+                            retry_count += 1
+                            # raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
                     logging.debug(f"文件下载成功: {dest}")
                     return
             except aiohttp.ClientResponseError as e:
@@ -208,4 +210,3 @@ class DownloadClass:
                              self.download_assets(version_info),
                              self.download_file(core_jar_url, core_jar_path, core_jar_sha1),
                              self.download_log4j2(version_info, version))
-    

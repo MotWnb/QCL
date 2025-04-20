@@ -157,11 +157,12 @@ class MinecraftLauncher:
 
         # 构建最终命令
         command = [java_path]
+        # 确保所有JVM参数在主类之前
         command.extend(java_args)
+        # if log4j_arg.strip():
+            # command.append(log4j_arg.strip())
         command.append(version_info["mainClass"])
         command.extend(game_args)
-        if log4j_arg.strip():
-            command.append(log4j_arg.strip())
 
         processed_command = []
         for part in command:
