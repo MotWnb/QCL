@@ -5,40 +5,15 @@ import os
 import aiofiles
 import aiohttp
 
-from utils import get_os_info
+from config_utils import get_config, settings
 from downloader import DownloadClass
 from launcher import MinecraftLauncher
-
 from log_manager import logger as logging
-from config_utils import get_config
+from utils import get_os_info, async_find_java
 
-# 获取配置
-config = get_config()
-
-
-async def save_config(config):
-    with open('config.json', 'w') as f:
-        json.dump(config, f, indent=4)
-
-async def settings():
-    global config
-    print("当前版本隔离状态: ", "开启" if config["version_isolation_enabled"] else "关闭")
-    choice = input("是否开启版本隔离？(y/n): ").strip().lower()
-    if choice == 'y':
-        config["version_isolation_enabled"] = True
-    elif choice == 'n':
-        config["version_isolation_enabled"] = False
-
-    print("当前是否使用镜像源: ", "是" if config["use_mirror"] else "否")
-    choice = input("是否使用镜像源？(y/n): ").strip().lower()
-    if choice == 'y':
-        config["use_mirror"] = True
-    elif choice == 'n':
-        config["use_mirror"] = False
-
-    await save_config(config)
 
 async def main():
+    config = await get_config()
     os_name, os_arch = await get_os_info()
     while True:
         user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n3. 设置\n4. 退出\n")
@@ -46,7 +21,7 @@ async def main():
         async with aiohttp.ClientSession(connector=connector) as session:
             version_manifest_url = config['version_manifest_url']
             version_manifest_path = config['version_manifest_path']
-            downloader = DownloadClass(session)
+            downloader = DownloadClass(session, config)  # 传递 config 参数
 
             if user_choice == "1":
                 logging.info("开始下载版本清单")
@@ -68,7 +43,8 @@ async def main():
                     continue
 
                 version_info_url = versions[selected_version]
-                version_info_path = os.path.join(config['minecraft_base_dir'], 'versions', selected_version, f"{selected_version}.json")
+                version_info_path = os.path.join(config['minecraft_base_dir'], 'versions', selected_version,
+                                                 f"{selected_version}.json")
                 logging.info(f"开始下载版本 {selected_version} 的信息")
                 await downloader.download_file(version_info_url, version_info_path)
 
@@ -98,7 +74,7 @@ async def main():
                     version_info = json.loads(await file.read())
                 launcher = MinecraftLauncher()
                 logging.info(f"开始启动版本 {version}")
-                await launcher.launcher(version_info, version, version_cwd, version_isolation_enabled)
+                await launcher.launcher(version_info, version, version_cwd, version_isolation_enabled, config)  # 传递 config 参数
             elif user_choice == "3":
                 await settings()
             elif user_choice == "4":
@@ -106,6 +82,6 @@ async def main():
             else:
                 logging.error("无效的选择，请重新输入。")
 
+
 if __name__ == "__main__":
     asyncio.run(main())
-    

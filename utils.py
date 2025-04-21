@@ -9,10 +9,6 @@ import aiofiles
 import psutil
 
 from log_manager import logger as logging
-from config_utils import get_config
-
-# 获取配置
-config = get_config()
 
 
 def _check_rules(element, os_name, os_arch=None, features=None):
@@ -46,7 +42,7 @@ def _check_rules(element, os_name, os_arch=None, features=None):
     return False  # 无匹配规则，默认拒绝
 
 
-async def get_cp(version_info, version, os_name, os_arch, version_directory):
+async def get_cp(version_info, version, os_name, os_arch, version_directory, config):
     cp = ""
     for library in version_info.get('libraries', []):
         if not _check_rules(library, os_name):
@@ -79,7 +75,7 @@ async def get_cp(version_info, version, os_name, os_arch, version_directory):
     return f'"{cp}"'
 
 
-async def async_find_java() -> Dict[str, str]:
+async def async_find_java(config) -> Dict[str, str]:
     java_executables = config['java_executables']
     keywords = config['keywords']
     ignore_dirs = config['ignore_dirs']
