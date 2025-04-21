@@ -9,10 +9,10 @@ from typing import Callable, Optional
 from log_manager import logger as logging
 
 from utils import get_cp, async_find_java, get_os_info, _check_rules
+from config_utils import get_config
 
-# 读取配置文件
-with open('config.json', 'r') as f:
-    config = json.load(f)
+# 获取配置
+config = get_config()
 
 class MinecraftLauncher:
     def __init__(self):

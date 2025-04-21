@@ -10,10 +10,10 @@ import aiohttp
 
 from utils import _check_rules, calculate_sha1
 from log_manager import logger as logging
+from config_utils import get_config
 
-# 读取配置文件
-with open('config.json', 'r') as f:
-    config = json.load(f)
+# 获取配置
+config = get_config()
 
 # 移除原有的日志配置
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

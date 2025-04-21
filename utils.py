@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import json
 import os
 import platform
 import re
@@ -10,10 +9,10 @@ import aiofiles
 import psutil
 
 from log_manager import logger as logging
+from config_utils import get_config
 
-# 读取配置文件
-with open('config.json', 'r') as f:
-    config = json.load(f)
+# 获取配置
+config = get_config()
 
 
 def _check_rules(element, os_name, os_arch=None, features=None):

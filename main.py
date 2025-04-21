@@ -10,10 +10,10 @@ from downloader import DownloadClass
 from launcher import MinecraftLauncher
 
 from log_manager import logger as logging
+from config_utils import get_config
 
-# 读取配置文件
-with open('config.json', 'r') as f:
-    config = json.load(f)
+# 获取配置
+config = get_config()
 
 
 async def save_config(config):
