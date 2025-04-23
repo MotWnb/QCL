@@ -6,14 +6,16 @@ import shutil
 import aiofiles
 import aiohttp
 
-from config_utils import get_config, settings
+from config_utils import get_config, settings, start_config_watcher
 from downloader import DownloadClass
 from launcher import MinecraftLauncher
 from log_manager import logger as logging
 from utils import get_os_info
 
-
 async def main():
+    # 启动配置文件监听
+    observer = start_config_watcher()
+
     config = await get_config()
     # 启动时删除 .temp 目录
     temp_path = os.path.join(config['minecraft_base_dir'], '.temp')
@@ -22,6 +24,7 @@ async def main():
         logging.info("已删除临时目录 .temp")
 
     os_name, os_arch = await get_os_info()
+
     while True:
         user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n3. 设置\n4. 退出\n")
         connector = aiohttp.TCPConnector(limit_per_host=1024)
@@ -89,6 +92,9 @@ async def main():
             else:
                 logging.error("无效的选择，请重新输入。")
 
+    # 程序结束时停止监听
+    observer.stop()
+    observer.join()
 
 if __name__ == "__main__":
     asyncio.run(main())

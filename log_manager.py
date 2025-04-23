@@ -3,9 +3,9 @@ import os
 from logging.handlers import RotatingFileHandler
 
 def setup_logger():
-    # 创建日志器
-    logger = logging.getLogger('QCL')
-    logger.setLevel(logging.DEBUG)
+    # 创建日志器，修改变量名避免隐藏外部作用域的 'logger'
+    qcl_logger = logging.getLogger('QCL')
+    qcl_logger.setLevel(logging.DEBUG)
 
     # 处理日志文件
     log_dir = 'QCL'
@@ -33,10 +33,10 @@ def setup_logger():
     console_handler.setLevel(logging.INFO)
 
     # 将处理器添加到日志器
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    qcl_logger.addHandler(file_handler)
+    qcl_logger.addHandler(console_handler)
 
-    return logger
+    return qcl_logger
 
 # 初始化日志器
 logger = setup_logger()
