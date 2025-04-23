@@ -34,9 +34,10 @@ class DownloadClass:
                 async with self.session.get(url) as response:
                     response.raise_for_status()
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    # 确保使用合适的缓冲区大小
                     async with aiofiles.open(dest, 'wb') as file:
                         while True:
-                            chunk = await response.content.read(8192)
+                            chunk = await response.content.read(1024 * 1024)  # 使用 1MB 缓冲区
                             if not chunk:
                                 break
                             await file.write(chunk)
@@ -45,19 +46,16 @@ class DownloadClass:
                         if file_sha1 != sha1:
                             logging.error(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
                             retry_count += 1
-                            # raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
                     logging.debug(f"文件下载成功: {dest}")
                     return
             except Exception as e:
-                # 判断e是否有statues
-                if hasattr(e, 'status') and hasattr(e,'message'):
+                if hasattr(e, 'status') and hasattr(e, 'message'):
                     logging.debug(f"下载失败: {url},错误码为{e.status},错误信息为{e.message}")
                 else:
                     logging.debug(f"下载失败: {url},错误信息为{e}")
                 retry_count += 1
                 wait_time = min(1 ** retry_count, 3)
                 await asyncio.sleep(wait_time)
-                retry_count += 1
                 if retry_count > max_retries:
                     logging.error(f"{dest}下载失败，已达到最大重试次数 {max_retries}")
                     raise e
@@ -135,6 +133,7 @@ class DownloadClass:
                     asset_url = asset_url.replace(self.config['resource_download_base_url'], self.config['bmclapi_base_url'] + '/assets')
                 asset_path = os.path.join(self.config['minecraft_base_dir'], 'assets', 'objects', asset_sha1[:2], asset_sha1)
                 tasks.append(self.download_file(asset_url, asset_path, asset_sha1))
+            # 并发下载所有资源文件
             await asyncio.gather(*tasks)
 
     async def download_version(self, version_info, version, os_name, os_arch):
@@ -144,7 +143,10 @@ class DownloadClass:
         core_jar_sha1 = version_info.get('downloads', {}).get('client', {}).get('sha1')
         if self.config['use_mirror']:  # 使用传入的配置
             core_jar_url = core_jar_url.replace("https://launcher.mojang.com", self.config['bmclapi_base_url'])
-        await asyncio.gather(self.download_libraries(version_info, version, os_name, os_arch),
-                             self.download_assets(version_info),
-                             self.download_file(core_jar_url, core_jar_path, core_jar_sha1),
-                             self.download_log4j2(version_info, version))
+        # 并发下载所有部分
+        await asyncio.gather(
+            self.download_libraries(version_info, version, os_name, os_arch),
+            self.download_assets(version_info),
+            self.download_file(core_jar_url, core_jar_path, core_jar_sha1),
+            self.download_log4j2(version_info, version)
+        )
