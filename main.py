@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import shutil
 
 import aiofiles
 import aiohttp
@@ -9,11 +10,17 @@ from config_utils import get_config, settings
 from downloader import DownloadClass
 from launcher import MinecraftLauncher
 from log_manager import logger as logging
-from utils import get_os_info, async_find_java
+from utils import get_os_info
 
 
 async def main():
     config = await get_config()
+    # 启动时删除 .temp 目录
+    temp_path = os.path.join(config['minecraft_base_dir'], '.temp')
+    if os.path.exists(temp_path):
+        shutil.rmtree(temp_path)
+        logging.info("已删除临时目录 .temp")
+
     os_name, os_arch = await get_os_info()
     while True:
         user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n3. 设置\n4. 退出\n")

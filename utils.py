@@ -3,6 +3,9 @@ import hashlib
 import os
 import platform
 import re
+import shutil
+import struct  # 用于解析二进制文件头
+import zipfile
 from typing import Dict, Set, List
 
 import aiofiles
@@ -82,24 +85,24 @@ async def async_find_java(config) -> Dict[str, str]:
     scanned_paths: Set[str] = set()
     java_versions: Dict[str, str] = {}
 
-    async def safe_scandir(path: str) -> List[os.DirEntry]:
+    async def safe_scandir(dir_path: str) -> List[os.DirEntry]:
         try:
             entries: List[os.DirEntry] = await asyncio.to_thread(
-                lambda: list(os.scandir(path))
+                lambda: list(os.scandir(dir_path))
             )
             return entries
         except (PermissionError, FileNotFoundError, NotADirectoryError):
             return []
         except Exception as e:
-            logging.debug(f"Scan error in {path}: {str(e)}")
+            logging.debug(f"Scan error in {dir_path}: {str(e)}")
             return []
 
-    async def scan_path(path: str, depth: int = 0) -> None:
-        if depth > 4 or not os.path.isdir(path) or any(ign in path.lower() for ign in ignore_dirs):
+    async def scan_path(dir_path: str, depth: int = 0) -> None:
+        if depth > 4 or not os.path.isdir(dir_path) or any(ign in dir_path.lower() for ign in ignore_dirs):
             return
 
         try:
-            entries = await safe_scandir(path)
+            entries = await safe_scandir(dir_path)
             for entry in entries:
                 entry_path = entry.path.replace("\\", "/")
                 if entry.is_file() and entry.name.lower() in java_executables:
@@ -115,10 +118,10 @@ async def async_find_java(config) -> Dict[str, str]:
                     if any(kw in dir_name for kw in keywords) or depth < 2:
                         await scan_path(str(entry_path), depth + 1)
         except Exception as e:
-            logging.debug(f"Error processing {path}: {str(e)}")
+            logging.debug(f"Error processing {dir_path}: {str(e)}")
 
-    async def get_java_version(path: str) -> str:
-        java_exe = os.path.join(path, "java.exe")
+    async def get_java_version(java_dir: str) -> str:
+        java_exe = os.path.join(java_dir, "java.exe")
         if not os.path.exists(java_exe):
             return "unknown"
 
@@ -153,8 +156,8 @@ async def async_find_java(config) -> Dict[str, str]:
     scan_tasks = []
     for env_var in ["PATH", "JAVA_HOME"]:
         if paths := os.getenv(env_var, ""):
-            for path in (p.strip() for p in paths.split(os.pathsep) if p.strip()):
-                abs_path = os.path.abspath(path)
+            for env_path in (p.strip() for p in paths.split(os.pathsep) if p.strip()):
+                abs_path = os.path.abspath(env_path)
                 scan_tasks.append(scan_path(abs_path))
 
     special_paths = [
@@ -183,6 +186,109 @@ async def get_os_info():
         raise ValueError(f"不支持的操作系统架构{os_arch}")
     return os_name, os_arch
 
+
+def check_library_arch_from_content(file_content, required_arch):
+    """
+    从文件内容检查共享库文件的架构是否符合所需架构。
+    :param file_content: 共享库文件的二进制内容
+    :param required_arch: 所需的架构，如 "32", "64", "arm64"
+    :return: 如果架构匹配则返回 True，否则返回 False
+    """
+    try:
+        header = file_content[:64]
+        # 检查是否为 ELF 文件（Linux 下的 so 文件）
+        if header[:4] == b'\x7fELF':
+            ei_class = header[4]
+            if ei_class == 1 and required_arch == "32":
+                return True
+            elif ei_class == 2 and required_arch == "64":
+                return True
+            else:
+                return False
+        # 检查是否为 PE 文件（Windows 下的 dll 文件）
+        elif header[:2] == b'MZ':
+            # 找到 PE 头的偏移量
+            pe_offset = struct.unpack('<I', header[0x3C:0x40])[0]
+            pe_header = file_content[pe_offset:pe_offset + 6]
+            machine_type = struct.unpack('<H', pe_header[4:6])[0]
+            if machine_type == 0x014c and required_arch == "32":  # IMAGE_FILE_MACHINE_I386
+                return True
+            elif machine_type == 0x8664 and required_arch == "64":  # IMAGE_FILE_MACHINE_AMD64
+                return True
+            elif machine_type == 0xAA64 and required_arch == "arm64":  # IMAGE_FILE_MACHINE_ARM64
+                return True
+            else:
+                return False
+        else:
+            logging.error("不是有效的 so 或 dll 文件")
+            return False
+    except Exception as e:
+        logging.error(f"检查架构时出错: {str(e)}")
+        return False
+
+def sync_extract(library_path, extract_path):
+    """
+    同步解压文件，并过滤掉签名文件、空目录、许可证文件和不符合当前系统架构的文件。
+
+    :param library_path: 要解压的文件路径
+    :param extract_path: 解压目标路径
+    """
+    # 获取当前系统架构
+    system_arch = platform.architecture()[0]
+    if '64' in system_arch:
+        required_arch = "64"
+    else:
+        required_arch = "32"
+
+    with zipfile.ZipFile(library_path, 'r') as zip_ref:
+        # 第一轮过滤：排除签名文件、空目录和许可证文件
+        filtered_members = []
+        for member in zip_ref.namelist():
+            skip_reasons = []
+            # 检查是否需要跳过文件
+            if member.startswith("META-INF/"):
+                skip_reasons.append("签名文件")
+            if member.endswith("/"):
+                skip_reasons.append("空目录")
+            if "LICENSE" in member.upper():
+                skip_reasons.append("许可证文件")
+
+            # 检查文件架构
+            if not skip_reasons:
+                try:
+                    file_content = zip_ref.read(member)
+                    # 直接使用 check_library_arch_from_content 检查架构，无需保存到磁盘
+                    if not check_library_arch_from_content(file_content, required_arch):
+                        skip_reasons.append("架构不匹配")
+                except Exception as e:
+                    logging.error(f"检查 {member} 架构时出错: {str(e)}")
+                    skip_reasons.append("架构检查出错")
+
+            if skip_reasons:
+                logging.debug(f"跳过文件 {member}，原因: {', '.join(skip_reasons)}")
+                continue
+            else:
+                logging.debug(f"保留文件 {member}")
+            filtered_members.append(member)
+        logging.debug(f"过滤完成,保留{filtered_members}")
+
+        for member in filtered_members:
+            # 只获取文件名，不包含目录结构
+            file_name = os.path.basename(member)
+            target_path = os.path.join(extract_path, file_name)
+
+            # 确保目标目录存在
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+            # 二进制模式复制文件
+            with zip_ref.open(member) as source, \
+                    open(target_path, 'wb') as target:
+                shutil.copyfileobj(source, target)  # type:ignore
+
+            # 保留文件权限（Linux/macOS需要）
+            if os.name != 'nt':
+                file_info = zip_ref.getinfo(member)
+                os.chmod(target_path, file_info.external_attr >> 16)
 
 async def calculate_sha1(file_path: str) -> str:
     """异步计算文件的SHA1哈希值"""

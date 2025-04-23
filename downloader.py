@@ -1,15 +1,11 @@
 import asyncio
 import json
 import os
-import re
-import shutil
-import zipfile
 
 import aiofiles
-import aiohttp
 
-from utils import _check_rules, calculate_sha1
 from log_manager import logger as logging
+from utils import _check_rules, calculate_sha1, sync_extract
 
 
 class DownloadClass:
@@ -19,6 +15,7 @@ class DownloadClass:
 
     async def download_file(self, url, dest, sha1=None):
         logging.debug(f"开始下载文件: {url}")
+
         if os.path.exists(dest):
             if sha1:
                 file_sha1 = await calculate_sha1(dest)
@@ -51,18 +48,19 @@ class DownloadClass:
                             # raise ValueError(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
                     logging.debug(f"文件下载成功: {dest}")
                     return
-            except aiohttp.ClientResponseError as e:
-                if e.status == 429:
-                    # 动态调整等待时间
-                    wait_time = min(2 ** retry_count, 30)
-                    logging.warning(f"收到429错误，等待 {wait_time} 秒后重试: {url}")
-                    await asyncio.sleep(wait_time)
-                    retry_count += 1
-                    if retry_count > max_retries:
-                        logging.error(f"{dest}下载失败，已达到最大重试次数 {max_retries}")
-                        raise e
+            except Exception as e:
+                # 判断e是否有statues
+                if hasattr(e, 'status') and hasattr(e,'message'):
+                    logging.debug(f"下载失败: {url},错误码为{e.status},错误信息为{e.message}")
                 else:
-                    logging.error(f"下载失败: {url}")
+                    logging.debug(f"下载失败: {url},错误信息为{e}")
+                retry_count += 1
+                wait_time = min(1 ** retry_count, 3)
+                await asyncio.sleep(wait_time)
+                retry_count += 1
+                if retry_count > max_retries:
+                    logging.error(f"{dest}下载失败，已达到最大重试次数 {max_retries}")
+                    raise e
 
     async def download_log4j2(self, version_info, version):
         if 'logging' in version_info:
@@ -106,68 +104,10 @@ class DownloadClass:
             extract_path = str(os.path.join(self.config['minecraft_base_dir'], 'versions', version, f"{version}-natives"))
             os.makedirs(extract_path, exist_ok=True)
 
-            if library_path is not None:  # 检查 library_path 是否已经赋值
+            if library_path is not None:
                 logging.debug(f"开始解压文件: {library_path} 到 {extract_path}")
-
-            def sync_extract():
-                # 根据目标架构设置过滤模式
-                arch_patterns = {
-                    "x64": re.compile(r"(x86|i686|arm|aarch)"),  # 过滤32位/ARM架构文件
-                    "x86": re.compile(r"(x64|arm64|aarch64)"),  # 过滤64位/ARM64文件
-                    "arm64": re.compile(r"(i386|x86_64|amd64)")  # 过滤x86架构文件
-                }
-                current_arch_pattern = arch_patterns.get(os_arch)
-
-                with zipfile.ZipFile(library_path, 'r') as zip_ref:
-                    # 第一轮过滤：排除不需要的文件
-                    filtered_members = []
-                    for member in zip_ref.namelist():
-                        # 跳过常见非必要文件
-                        if any([
-                            member.startswith("META-INF/"),  # 签名文件
-                            member.endswith("/"),  # 空目录
-                            "LICENSE" in member.upper(),  # 许可证文件
-                            # 架构过滤：当存在对应架构模式时检查
-                            current_arch_pattern and current_arch_pattern.search(member)
-                        ]):
-                            continue
-                        filtered_members.append(member)
-
-                    # 第二轮处理：解决文件名冲突
-                    member_map = {}
-                    for member in filtered_members:
-                        base_name = os.path.basename(member)
-                        # 生成简化文件名（去除架构标识和扩展名）
-                        clean_name = re.sub(
-                            r'-(linux|windows|macos|arm|aarch|64|32|x86|x64|arm64|v\d+)[_.-]?',
-                            '',
-                            base_name.split('.')[0]
-                        )
-                        # 保留路径最长的版本（通常为最完整的实现）
-                        if clean_name not in member_map or \
-                                len(member.split('/')) > len(member_map[clean_name].split('/')):
-                            member_map[clean_name] = member
-
-                    # 执行解压操作
-                    for member in member_map.values():
-                        target_path = os.path.join(extract_path, os.path.basename(member))
-
-                        # 确保目标目录存在
-                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-
-                        # 二进制模式复制文件
-                        with zip_ref.open(member) as source, \
-                                open(target_path, 'wb') as target:
-                            shutil.copyfileobj(source, target)  # type:ignore
-
-                        # 保留文件权限（Linux/macOS需要）
-                        if os.name != 'nt':
-                            file_info = zip_ref.getinfo(member)
-                            os.chmod(target_path, file_info.external_attr >> 16)
-
-            logging.debug(f"开始解压文件: {library_path} 到 {extract_path}")
-            await asyncio.to_thread(sync_extract)
-            logging.debug(f"文件解压完成: {library_path} 到 {extract_path}")
+                await asyncio.to_thread(sync_extract, library_path, extract_path)
+                logging.debug(f"文件解压完成: {library_path} 到 {extract_path}")
 
     async def download_libraries(self, version_info, version, os_name, os_arch):
         libraries = version_info.get('libraries', [])
@@ -208,4 +148,3 @@ class DownloadClass:
                              self.download_assets(version_info),
                              self.download_file(core_jar_url, core_jar_path, core_jar_sha1),
                              self.download_log4j2(version_info, version))
-
