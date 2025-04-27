@@ -1,4 +1,5 @@
 aiofiles
 aiohttp
 psutil
+watchdog
 # pyperclip

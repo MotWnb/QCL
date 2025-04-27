@@ -1,19 +1,31 @@
 import json
 import os
+from pathlib import Path
 from log_manager import logger as logging
 import aiofiles
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+import asyncio
 
 # 定义全局变量
 _config_cache = None
 _last_modified_time = 0
 
+# 获取项目根目录
+PROJECT_ROOT = Path(__file__).parent
+
 async def get_config():
-    if os.path.exists("QCL/config.json"):
-        async with aiofiles.open("QCL/config.json", 'r', encoding='utf-8') as f:
+    global _config_cache, _last_modified_time
+    config_path = PROJECT_ROOT / "QCL" / "config.json"
+    if _config_cache and os.path.getmtime(config_path) == _last_modified_time:
+        return _config_cache
+
+    if config_path.exists():
+        async with aiofiles.open(config_path, 'r', encoding='utf-8') as f:
             content = await f.read()
-            return json.loads(content)
+            _config_cache = json.loads(content)
+            _last_modified_time = os.path.getmtime(config_path)
+            return _config_cache
     else:
         logging.warning("配置文件不存在，将使用默认配置")
         default_config = {
@@ -42,13 +54,19 @@ async def get_config():
             "version_isolation_enabled": True,
             "use_mirror": False,
         }
-        async with aiofiles.open("QCL/config.json", 'w', encoding='utf-8') as f:
+        async with aiofiles.open(config_path, 'w', encoding='utf-8') as f:
             await f.write(json.dumps(default_config, indent=4))
+        _config_cache = default_config
+        _last_modified_time = os.path.getmtime(config_path)
         return default_config
 
 async def save_config(config):
-    async with aiofiles.open("QCL/config.json", 'w', encoding='utf-8') as f:
+    config_path = PROJECT_ROOT / "QCL" / "config.json"
+    async with aiofiles.open(config_path, 'w', encoding='utf-8') as f:
         await f.write(json.dumps(config, indent=4))
+    global _config_cache, _last_modified_time
+    _config_cache = config
+    _last_modified_time = os.path.getmtime(config_path)
 
 async def settings():
     config = await get_config()
@@ -67,25 +85,30 @@ async def settings():
         config["use_mirror"] = False
     await save_config(config)
 
-
 class ConfigFileHandler(FileSystemEventHandler):
+    def __init__(self, loop):
+        self.loop = loop
+
     def on_modified(self, event):
-        global _config_cache, _last_modified_time
-        config_path = 'QCL/config.json'  # 修改为实际的配置文件路径
-        if event.src_path == os.path.abspath(config_path):
-            try:
-                with open(config_path, 'r') as f:
-                    _config_cache = json.load(f)
-                _last_modified_time = os.path.getmtime(config_path)
-                logging.info("配置文件已更新，缓存已刷新")
-            except Exception as e:
-                logging.error(f"更新配置缓存时出错: {str(e)}")
+        async def async_on_modified():
+            global _config_cache, _last_modified_time
+            config_path = PROJECT_ROOT / "QCL" / "config.json"
+            if event.src_path == str(config_path.resolve()):
+                try:
+                    async with aiofiles.open(config_path, 'r') as f:
+                        content = await f.read()
+                        _config_cache = json.loads(content)
+                    _last_modified_time = os.path.getmtime(config_path)
+                    logging.info("配置文件已更新，缓存已刷新")
+                except Exception as e:
+                    logging.error(f"更新配置缓存时出错: {str(e)}")
+        self.loop.create_task(async_on_modified())
 
 def start_config_watcher():
-    event_handler = ConfigFileHandler()
+    loop = asyncio.get_running_loop()
+    event_handler = ConfigFileHandler(loop)
     observer = Observer()
-    config_dir = os.path.dirname(os.path.abspath('QCL/config.json'))  # 修改为实际的配置文件路径
-    # 移除不可达代码
+    config_dir = (PROJECT_ROOT / "QCL").resolve()
     observer.schedule(event_handler, path=config_dir, recursive=False)
     observer.start()
     return observer
