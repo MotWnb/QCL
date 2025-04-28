@@ -7,58 +7,56 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import asyncio
 
-# 定义全局变量
 _config_cache = None
-_last_modified_time = 0
-
-# 获取项目根目录
-PROJECT_ROOT = Path(__file__).parent
+_last_modified_time = None
+_config_lock = asyncio.Lock()
 
 async def get_config():
     global _config_cache, _last_modified_time
-    config_path = PROJECT_ROOT / "QCL" / "config.json"
-    if _config_cache and os.path.getmtime(config_path) == _last_modified_time:
-        return _config_cache
-
-    if config_path.exists():
-        async with aiofiles.open(config_path, 'r', encoding='utf-8') as f:
-            content = await f.read()
-            _config_cache = json.loads(content)
-            _last_modified_time = os.path.getmtime(config_path)
+    async with _config_lock:
+        config_path = PROJECT_ROOT / "QCL" / "config.json"
+        if _config_cache and os.path.getmtime(config_path) == _last_modified_time:
             return _config_cache
-    else:
-        logging.warning("配置文件不存在，将使用默认配置")
-        default_config = {
-            "version_manifest_url": "https://piston-meta.mojang.com/mc/game/version_manifest.json",
-            "version_manifest_path": ".minecraft/version_manifest.json",
-            "resource_download_base_url": "https://resources.download.minecraft.net",
-            "bmclapi_base_url": "https://bmclapi2.bangbang93.com",
-            "minecraft_base_dir": ".minecraft",
-            "java_executables": [
-                "javaw.exe",
-                "java.exe"
-            ],
-            "keywords": [
-                "java",
-                "jdk",
-                "jre",
-                "oracle",
-                "minecraft",
-                "runtime"
-            ],
-            "ignore_dirs": [
-                "windows",
-                "system32",
-                "temp"
-            ],
-            "version_isolation_enabled": True,
-            "use_mirror": False,
-        }
-        async with aiofiles.open(config_path, 'w', encoding='utf-8') as f:
-            await f.write(json.dumps(default_config, indent=4))
-        _config_cache = default_config
-        _last_modified_time = os.path.getmtime(config_path)
-        return default_config
+
+        if config_path.exists():
+            async with aiofiles.open(config_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                _config_cache = json.loads(content)
+                _last_modified_time = os.path.getmtime(config_path)
+                return _config_cache
+        else:
+            logging.warning("配置文件不存在，将使用默认配置")
+            default_config = {
+                "version_manifest_url": "https://piston-meta.mojang.com/mc/game/version_manifest.json",
+                "version_manifest_path": ".minecraft/version_manifest.json",
+                "resource_download_base_url": "https://resources.download.minecraft.net",
+                "bmclapi_base_url": "https://bmclapi2.bangbang93.com",
+                "minecraft_base_dir": ".minecraft",
+                "java_executables": [
+                    "javaw.exe",
+                    "java.exe"
+                ],
+                "keywords": [
+                    "java",
+                    "jdk",
+                    "jre",
+                    "oracle",
+                    "minecraft",
+                    "runtime"
+                ],
+                "ignore_dirs": [
+                    "windows",
+                    "system32",
+                    "temp"
+                ],
+                "version_isolation_enabled": True,
+                "use_mirror": False,
+            }
+            async with aiofiles.open(config_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(default_config, indent=4))
+            _config_cache = default_config
+            _last_modified_time = os.path.getmtime(config_path)
+            return default_config
 
 async def save_config(config):
     config_path = PROJECT_ROOT / "QCL" / "config.json"
