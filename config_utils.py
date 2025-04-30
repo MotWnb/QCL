@@ -11,6 +11,13 @@ _config_cache = None
 _last_modified_time = None
 _config_lock = asyncio.Lock()
 
+PROJECT_ROOT = Path(__file__).parent
+
+async def read_config_file(config_path):
+    async with aiofiles.open(config_path, 'r', encoding='utf-8') as f:
+        content = await f.read()
+        return json.loads(content)
+
 async def get_config():
     global _config_cache, _last_modified_time
     async with _config_lock:
@@ -19,11 +26,13 @@ async def get_config():
             return _config_cache
 
         if config_path.exists():
-            async with aiofiles.open(config_path, 'r', encoding='utf-8') as f:
-                content = await f.read()
-                _config_cache = json.loads(content)
+            try:
+                _config_cache = await read_config_file(config_path)
                 _last_modified_time = os.path.getmtime(config_path)
                 return _config_cache
+            except Exception as e:
+                logging.error(f"读取配置文件出错: {str(e)}")
+                return None
         else:
             logging.warning("配置文件不存在，将使用默认配置")
             default_config = {
@@ -62,6 +71,8 @@ async def save_config(config):
     config_path = PROJECT_ROOT / "QCL" / "config.json"
     async with aiofiles.open(config_path, 'w', encoding='utf-8') as f:
         await f.write(json.dumps(config, indent=4))
+    # 确保文件写入完成后再更新缓存
+    await asyncio.sleep(0.1)
     global _config_cache, _last_modified_time
     _config_cache = config
     _last_modified_time = os.path.getmtime(config_path)
@@ -93,11 +104,15 @@ class ConfigFileHandler(FileSystemEventHandler):
             config_path = PROJECT_ROOT / "QCL" / "config.json"
             if event.src_path == str(config_path.resolve()):
                 try:
-                    async with aiofiles.open(config_path, 'r') as f:
+                    async with aiofiles.open(config_path, 'r', encoding='utf-8') as f:
                         content = await f.read()
-                        _config_cache = json.loads(content)
-                    _last_modified_time = os.path.getmtime(config_path)
-                    logging.info("配置文件已更新，缓存已刷新")
+                        # 检查文件内容是否为空
+                        if content.strip():
+                            _config_cache = json.loads(content)
+                            _last_modified_time = os.path.getmtime(config_path)
+                            logging.info("配置文件已更新，缓存已刷新")
+                        else:
+                            logging.warning("配置文件内容为空，跳过缓存更新")
                 except Exception as e:
                     logging.error(f"更新配置缓存时出错: {str(e)}")
         self.loop.create_task(async_on_modified())

@@ -112,10 +112,15 @@ class DownloadClass:
         tasks = [self.download_library(library, os_name, os_arch, version) for library in libraries]
         await asyncio.gather(*tasks)
 
+    def replace_with_mirror(self, url):
+        if self.config['use_mirror']:
+            url = url.replace(self.config['resource_download_base_url'], self.config['bmclapi_base_url'] + '/assets')
+            url = url.replace("https://launcher.mojang.com", self.config['bmclapi_base_url'])
+        return url
+
     async def download_assets(self, version_info):
         asset_index_url = version_info.get('assetIndex', {}).get('url')
-        if self.config['use_mirror']:  # 使用传入的配置
-            asset_index_url = asset_index_url.replace(self.config['resource_download_base_url'], self.config['bmclapi_base_url'] + '/assets')
+        asset_index_url = self.replace_with_mirror(asset_index_url)
         if asset_index_url:
             asset_index_sha1 = version_info.get('assetIndex', {}).get('sha1')
             asset_index_id = version_info.get('assets', '')
@@ -129,8 +134,7 @@ class DownloadClass:
             for asset, info in asset_index.get('objects', {}).items():
                 asset_sha1 = info['hash']
                 asset_url = f"{self.config['resource_download_base_url']}/{asset_sha1[:2]}/{asset_sha1}"
-                if self.config['use_mirror']:  # 使用传入的配置
-                    asset_url = asset_url.replace(self.config['resource_download_base_url'], self.config['bmclapi_base_url'] + '/assets')
+                asset_url = self.replace_with_mirror(asset_url)
                 asset_path = os.path.join(self.config['minecraft_base_dir'], 'assets', 'objects', asset_sha1[:2], asset_sha1)
                 tasks.append(self.download_file(asset_url, asset_path, asset_sha1))
             # 并发下载所有资源文件
@@ -139,10 +143,9 @@ class DownloadClass:
     async def download_version(self, version_info, version, os_name, os_arch):
         os.makedirs(os.path.join(self.config['minecraft_base_dir'], 'versions', version, f"{version}-natives"), exist_ok=True)
         core_jar_url = version_info.get('downloads', {}).get('client', {}).get('url')
+        core_jar_url = self.replace_with_mirror(core_jar_url)
         core_jar_path = os.path.join(self.config['minecraft_base_dir'], 'versions', version, f"{version}.jar")
         core_jar_sha1 = version_info.get('downloads', {}).get('client', {}).get('sha1')
-        if self.config['use_mirror']:  # 使用传入的配置
-            core_jar_url = core_jar_url.replace("https://launcher.mojang.com", self.config['bmclapi_base_url'])
         # 并发下载所有部分
         await asyncio.gather(
             self.download_libraries(version_info, version, os_name, os_arch),
