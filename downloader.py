@@ -1,32 +1,35 @@
 import asyncio
 import json
 import os
-
 import aiofiles
+from log_manager import logger
+from utils import Utils
 
-from log_manager import logger as logging
-from utils import _check_rules, calculate_sha1, sync_extract
+class IDownloader:
+    async def download_file(self, url, dest, sha1=None): pass
+    async def download_log4j2(self, version_info, version): pass
+    async def download_library(self, library, os_name, os_arch, version): pass
+    async def download_libraries(self, version_info, version, os_name, os_arch): pass
+    def replace_with_mirror(self, url): pass
+    async def download_assets(self, version_info): pass
+    async def download_version(self, version_info, version, os_name, os_arch): pass
 
-
-class DownloadClass:
+class DownloadClass(IDownloader):
     def __init__(self, session, config):
         self.session = session
-        self.config = config  # 保存配置信息
+        self.config = config
+        self.utils = Utils()
 
     async def download_file(self, url, dest, sha1=None):
-        logging.debug(f"开始下载文件: {url}")
-
+        logger.debug(f"开始下载文件: {url}")
         if os.path.exists(dest):
             if sha1:
-                file_sha1 = await calculate_sha1(dest)
-                if file_sha1 == sha1:
-                    return
+                file_sha1 = await self.utils.calculate_sha1(dest)
+                if file_sha1 == sha1: return
                 else:
-                    logging.error(f"SHA1校验失败: {dest}")
+                    logger.error(f"SHA1校验失败: {dest}")
                     os.remove(dest)
-            else:
-                os.remove(dest)
-
+            else: os.remove(dest)
         retry_count = 0
         max_retries = 5
         while True:
@@ -34,48 +37,42 @@ class DownloadClass:
                 async with self.session.get(url) as response:
                     response.raise_for_status()
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    # 确保使用合适的缓冲区大小
                     async with aiofiles.open(dest, 'wb') as file:
                         while True:
-                            chunk = await response.content.read(1024 * 1024)  # 使用 1MB 缓冲区
-                            if not chunk:
-                                break
+                            chunk = await response.content.read(1024 * 1024)
+                            if not chunk: break
                             await file.write(chunk)
                     if sha1:
-                        file_sha1 = await calculate_sha1(dest)
+                        file_sha1 = await self.utils.calculate_sha1(dest)
                         if file_sha1 != sha1:
-                            logging.error(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
+                            logger.error(f"SHA1校验失败: {dest},文件SHA1为{file_sha1},正确的为{sha1},下载链接为{url}")
                             retry_count += 1
-                    logging.debug(f"文件下载成功: {dest}")
+                    logger.debug(f"文件下载成功: {dest}")
                     return
             except Exception as e:
                 if hasattr(e, 'status') and hasattr(e, 'message'):
-                    logging.debug(f"下载失败: {url},错误码为{e.status},错误信息为{e.message}")
+                    logger.debug(f"下载失败: {url},错误码为{e.status},错误信息为{e.message}")
                 else:
-                    logging.debug(f"下载失败: {url},错误信息为{e}")
+                    logger.debug(f"下载失败: {url},错误信息为{e}")
                 retry_count += 1
                 wait_time = min(1 ** retry_count, 3)
                 await asyncio.sleep(wait_time)
                 if retry_count > max_retries:
-                    logging.error(f"{dest}下载失败，已达到最大重试次数 {max_retries}")
+                    logger.error(f"{dest}下载失败，已达到最大重试次数 {max_retries}")
                     raise e
 
     async def download_log4j2(self, version_info, version):
         if 'logging' in version_info:
             log4j2_url = version_info['logging']['client']['file']['url']
-            if self.config['use_mirror']:  # 使用传入的配置
-                log4j2_url = log4j2_url.replace("https://resources.download.minecraft.net", self.config['bmclapi_base_url'] + "/assets")
+            if self.config['use_mirror']: log4j2_url = log4j2_url.replace("https://resources.download.minecraft.net", self.config['bmclapi_base_url'] + "/assets")
             log4j2_path = os.path.join(self.config['minecraft_base_dir'], 'versions', version, 'log4j2.xml')
             await self.download_file(log4j2_url, log4j2_path)
 
     async def download_library(self, library, os_name, os_arch, version):
         artifact = library.get('downloads', {}).get('artifact')
         need_extract = False
-        library_path = None  # 初始化 library_path 为 None
-
-        if not _check_rules(library, os_name):
-            return
-
+        library_path = None
+        if not self.utils._check_rules(library, os_name): return
         classifiers = library.get('downloads', {}).get('classifiers')
         if classifiers:
             natives = library.get("natives")
@@ -88,24 +85,20 @@ class DownloadClass:
                     artifact = info
                     need_extract = True
                     break
-
         if artifact:
             sha1 = artifact.get('sha1')
             library_path = str(os.path.join(self.config['minecraft_base_dir'], 'libraries', artifact['path']))
             library_url = artifact.get('url')
-            if self.config['use_mirror']:  # 使用传入的配置
-                library_url = library_url.replace("https://libraries.minecraft.net", self.config['bmclapi_base_url'] + "/maven")
+            if self.config['use_mirror']: library_url = library_url.replace("https://libraries.minecraft.net", self.config['bmclapi_base_url'] + "/maven")
             await self.download_file(library_url, library_path, sha1)
             need_extract = need_extract or "natives" in library_url
-
         if need_extract:
             extract_path = str(os.path.join(self.config['minecraft_base_dir'], 'versions', version, f"{version}-natives"))
             os.makedirs(extract_path, exist_ok=True)
-
             if library_path is not None:
-                logging.debug(f"开始解压文件: {library_path} 到 {extract_path}")
-                await asyncio.to_thread(sync_extract, library_path, extract_path)
-                logging.debug(f"文件解压完成: {library_path} 到 {extract_path}")
+                logger.debug(f"开始解压文件: {library_path} 到 {extract_path}")
+                await asyncio.to_thread(self.utils.sync_extract, library_path, extract_path)
+                logger.debug(f"文件解压完成: {library_path} 到 {extract_path}")
 
     async def download_libraries(self, version_info, version, os_name, os_arch):
         libraries = version_info.get('libraries', [])
@@ -126,10 +119,8 @@ class DownloadClass:
             asset_index_id = version_info.get('assets', '')
             asset_index_path = os.path.join(self.config['minecraft_base_dir'], 'assets', 'indexes', f"{asset_index_id}.json")
             await self.download_file(asset_index_url, asset_index_path, asset_index_sha1)
-
             async with aiofiles.open(asset_index_path, 'r') as file:
                 asset_index = json.loads(await file.read())
-
             tasks = []
             for asset, info in asset_index.get('objects', {}).items():
                 asset_sha1 = info['hash']
@@ -137,7 +128,6 @@ class DownloadClass:
                 asset_url = self.replace_with_mirror(asset_url)
                 asset_path = os.path.join(self.config['minecraft_base_dir'], 'assets', 'objects', asset_sha1[:2], asset_sha1)
                 tasks.append(self.download_file(asset_url, asset_path, asset_sha1))
-            # 并发下载所有资源文件
             await asyncio.gather(*tasks)
 
     async def download_version(self, version_info, version, os_name, os_arch):
@@ -146,7 +136,6 @@ class DownloadClass:
         core_jar_url = self.replace_with_mirror(core_jar_url)
         core_jar_path = os.path.join(self.config['minecraft_base_dir'], 'versions', version, f"{version}.jar")
         core_jar_sha1 = version_info.get('downloads', {}).get('client', {}).get('sha1')
-        # 并发下载所有部分
         await asyncio.gather(
             self.download_libraries(version_info, version, os_name, os_arch),
             self.download_assets(version_info),
