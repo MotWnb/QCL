@@ -24,6 +24,7 @@ async def main(config_manager: IConfigManager, downloader: IDownloader, launcher
         user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n3. 设置\n4. 退出\n")
         connector = aiohttp.TCPConnector(limit_per_host=1024)
         async with aiohttp.ClientSession(connector=connector) as session:
+            downloader.session = session  # 设置 session
             version_manifest_url = config['version_manifest_url']
             version_manifest_path = config['version_manifest_path']
             if user_choice == "1":
@@ -80,7 +81,8 @@ if __name__ == "__main__":
     from launcher import MinecraftLauncher
     from utils import Utils
     config_manager = ConfigManager()
-    downloader = DownloadClass(None, None)
+    config = asyncio.run(config_manager.get_config())  # 获取配置
+    downloader = DownloadClass(None, config)  # 传递配置字典
     launcher = MinecraftLauncher()
     utils = Utils()
     asyncio.run(main(config_manager, downloader, launcher, utils))

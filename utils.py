@@ -14,7 +14,7 @@ import psutil
 from log_manager import logger
 
 class IUtils:
-    def _check_rules(self, element, os_name, os_arch=None, features=None): pass
+    def check_rules(self, element, os_name, os_arch=None, features=None): pass
     async def get_cp(self, version_info, version, os_name, os_arch, version_directory, config): pass
     async def async_find_java(self, config): pass
     async def get_os_info(self): pass
@@ -23,7 +23,7 @@ class IUtils:
     async def calculate_sha1(self, file_path): pass
 
 class Utils(IUtils):
-    def _check_rules(self, element, os_name, os_arch=None, features=None):
+    def check_rules(self, element, os_name, os_arch=None, features=None):
         rules = element.get("rules", [])
         if not rules: return True
         for rule in rules:
@@ -43,7 +43,7 @@ class Utils(IUtils):
     async def get_cp(self, version_info, version, os_name, os_arch, version_directory, config):
         cp = ""
         for library in version_info.get('libraries', []):
-            if not self._check_rules(library, os_name): continue
+            if not self.check_rules(library, os_name): continue
             artifact = library.get('downloads', {}).get('artifact')
             if artifact:
                 lib_path = str(os.path.join(config['minecraft_base_dir'], 'libraries', artifact['path']) + ';')

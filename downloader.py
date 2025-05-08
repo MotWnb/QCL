@@ -72,7 +72,7 @@ class DownloadClass(IDownloader):
         artifact = library.get('downloads', {}).get('artifact')
         need_extract = False
         library_path = None
-        if not self.utils._check_rules(library, os_name): return
+        if not self.utils.check_rules(library, os_name): return
         classifiers = library.get('downloads', {}).get('classifiers')
         if classifiers:
             natives = library.get("natives")

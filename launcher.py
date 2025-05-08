@@ -30,7 +30,7 @@ class MinecraftLauncher(ILauncher):
         for arg in version_info.get('arguments', {}).get('game', []):
             if isinstance(arg, str): game_args.append(arg)
             elif isinstance(arg, dict):
-                if utils._check_rules(arg, os_name, os_arch, features={'is_demo_user': False, 'has_custom_resolution': False, 'has_quick_plays_support': False}):
+                if utils.check_rules(arg, os_name, os_arch, features={'is_demo_user': False, 'has_custom_resolution': False, 'has_quick_plays_support': False}):
                     value = arg.get('value', [])
                     if isinstance(value, list): game_args.extend(value)
                     else: game_args.append(str(value))
@@ -43,7 +43,7 @@ class MinecraftLauncher(ILauncher):
         for arg in version_info.get('arguments', {}).get('jvm', []):
             if isinstance(arg, str): java_args.append(arg)
             elif isinstance(arg, dict):
-                if utils._check_rules(arg, os_name, os_arch):
+                if utils.check_rules(arg, os_name, os_arch):
                     value = arg.get('value', [])
                     if isinstance(value, list): java_args.extend(value)
                     else: java_args.append(str(value))
