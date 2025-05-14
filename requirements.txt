@@ -3,4 +3,5 @@ aiohttp
 psutil
 watchdog
 pyperclip
-# py-machineid
+py-machineid
+cryptography

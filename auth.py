@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -9,7 +11,9 @@ from typing import Dict, Optional, Tuple, Any, List
 
 import aiofiles
 import aiohttp
+import machineid
 import pyperclip
+from cryptography.fernet import Fernet
 
 logger = logging.getLogger('QCL')
 
@@ -336,7 +340,7 @@ class AuthManager:
 
 # 异步验证函数，根据用户选择调用对应的验证器
 async def perform_authentication(refresh_token: Optional[str] = None) -> Dict:
-    user_manager = UserManager("QCL/users.json")
+    user_manager = UserManager("QCL/users.ini")
     """根据用户选择执行异步验证并返回结果"""
     manager = AuthManager()
     auth_method = await manager.prompt_for_auth_method()
@@ -361,6 +365,32 @@ class UserManager:
         self.data_file = data_file
         self.users = {}  # 内存中的用户数据缓存
 
+    @staticmethod
+    def _get_fernet_key() -> bytes:
+        """生成符合Fernet要求的密钥"""
+        device_id = machineid.id().encode('utf-8')
+        sha256_hash = hashlib.sha256(device_id).digest()
+        return base64.urlsafe_b64encode(sha256_hash)
+
+    @staticmethod
+    def encrypt_dict(data: dict) -> str:
+        """加密字典并返回Base64编码的字符串"""
+        key = UserManager._get_fernet_key()
+        cipher = Fernet(key)
+        serialized_data = json.dumps(data).encode('utf-8')
+        encrypted_bytes = cipher.encrypt(serialized_data)
+        # 将加密后的bytes转换为Base64编码的字符串
+        return encrypted_bytes.decode('ascii')
+
+    @staticmethod
+    def decrypt_dict(encrypted_data: str) -> dict:
+        """解密Base64编码的字符串并返回字典"""
+        key = UserManager._get_fernet_key()
+        cipher = Fernet(key)
+        # 将Base64字符串转回bytes
+        encrypted_bytes = encrypted_data.encode('ascii')
+        decrypted_bytes = cipher.decrypt(encrypted_bytes)
+        return json.loads(decrypted_bytes.decode('utf-8'))
     async def user_load(self) -> Dict[str, Dict]:
         """
         异步加载所有用户账户信息
@@ -372,7 +402,9 @@ class UserManager:
             if os.path.exists(self.data_file):
                 async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as file:
                     content = await file.read()
-                    self.users = json.loads(content)
+                    content = await asyncio.to_thread(self.decrypt_dict, content)
+                    print(content)
+                    self.users = content
                     logger.info(f"成功加载 {len(self.users)} 个用户数据")
             else:
                 logger.info("用户数据文件不存在，创建空数据")
@@ -411,7 +443,8 @@ class UserManager:
         """异步将用户数据保存到文件"""
         try:
             async with aiofiles.open(self.data_file, 'w', encoding='utf-8') as file:
-                await file.write(json.dumps(self.users, ensure_ascii=False, indent=2))
+                content = str(await asyncio.to_thread(self.encrypt_dict, self.users))
+                await file.write(content)
         except Exception as e:
             logger.error(f"保存用户数据失败: {str(e)}")
 
@@ -489,15 +522,14 @@ if __name__ == "__main__":
 
 
     async def main():
-        user_manager = UserManager("QCL/users.json")
+        user_manager = UserManager("QCL/users.ini")
 
         await user_manager.user_load()
         user_list = user_manager.list_all_users()
         username_list = [user['username'] for user in user_list]
         print(f"当前用户列表：[{', '.join(username_list)}]")
 
-        """
-                try:
+        try:
             # 执行验证
             auth_result = await perform_authentication()
             # username = auth_result['username']
@@ -518,7 +550,6 @@ if __name__ == "__main__":
 
         except Exception as e:
             print(f"验证失败: {str(e)}")
-        """
 
 
     asyncio.run(main())
