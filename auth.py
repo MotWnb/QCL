@@ -7,11 +7,12 @@ import os
 import webbrowser
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Dict, Optional, Tuple, Any, List
+from typing import Dict, Optional, Tuple, List
 
 import aiofiles
 import aiohttp
 import machineid
+import msal
 import pyperclip
 from cryptography.fernet import Fernet
 
@@ -28,19 +29,24 @@ class IAuthenticator(ABC):
         pass
 
 class MicrosoftAuthenticator(IAuthenticator):
-    def __init__(self, client_id: str = "de243363-2e6a-44dc-82cb-ea8d6b5cd98d", redirect_uri: str = "http://localhost:8080/callback"):
+    def __init__(self, client_id: str = "de243363-2e6a-44dc-82cb-ea8d6b5cd98d",
+                 redirect_uri: str = "http://localhost:8080/callback"):
         self.client_id = client_id
         self.redirect_uri = redirect_uri
-        self.microsoft_auth_endpoint = "https://login.microsoftonline.com/consumers/oauth2/v2.0"
+        self.scopes = ["XboxLive.signin"]
         self.xbox_auth_endpoint = "https://user.auth.xboxlive.com/user/authenticate"
         self.xsts_auth_endpoint = "https://xsts.auth.xboxlive.com/xsts/authorize"
         self.minecraft_auth_endpoint = "https://api.minecraftservices.com/authentication/login_with_xbox"
         self.minecraft_entitlements_endpoint = "https://api.minecraftservices.com/entitlements/mcstore"
         self.minecraft_profile_endpoint = "https://api.minecraftservices.com/minecraft/profile"
+        self.msal_app = msal.PublicClientApplication(
+            client_id=self.client_id,
+            authority="https://login.microsoftonline.com/consumers"
+        )
 
     async def authenticate(self, refresh_token: Optional[str] = None) -> Dict:
         try:
-            microsoft_token = await self._refresh_microsoft_token(refresh_token) if refresh_token else await self._device_code_flow()
+            microsoft_token = await self._get_microsoft_token(refresh_token)  # 使用MSAL获取Microsoft令牌
             xbl_token, xbl_uhs = await self._authenticate_with_xbox_live(microsoft_token["access_token"])
             xsts_token, xsts_uhs = await self._authenticate_with_xsts(xbl_token)
             minecraft_token = await self._authenticate_with_minecraft(xsts_uhs, xsts_token)
@@ -59,66 +65,57 @@ class MicrosoftAuthenticator(IAuthenticator):
             logger.error(f"验证失败: {str(e)}")
             raise
 
-    async def _device_code_flow(self) -> Dict:
-        device_code_data = await self._get_device_code()
-        print(f"请打开 {device_code_data['verification_uri']}")
-        print(f"并输入代码: {device_code_data['user_code']}")
-        print("代码已复制到剪贴板")
-        pyperclip.copy(device_code_data['user_code'])
-        webbrowser.open(device_code_data['verification_uri'])
-        return await self._poll_for_authorization(device_code_data['device_code'], device_code_data['interval'])
-
-    async def _get_device_code(self) -> Dict:
-        url = f"{self.microsoft_auth_endpoint}/devicecode"
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data={"client_id": self.client_id, "scope": "XboxLive.signin offline_access"}) as response:
-                response.raise_for_status()
-                return await response.json()
-
-    async def _poll_for_authorization(self, device_code: str, interval: int) -> Any | None:
-        url = f"{self.microsoft_auth_endpoint}/token"
-        data = {"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "client_id": self.client_id, "device_code": device_code}
-        while True:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=data) as response:
-                    if response.status == 400:
-                        error_data = await response.json()
-                        error = error_data.get("error")
-                        if error == "authorization_pending":
-                            await asyncio.sleep(interval)
-                            continue
-                        elif error == "slow_down":
-                            await asyncio.sleep(interval * 2)
-                            continue
-                        else:
-                            raise Exception(f"授权失败: {error} - {error_data.get('error_description')}")
-                    else:
-                        response.raise_for_status()
-                        return await response.json()
-        return None
-
-    async def _refresh_microsoft_token(self, refresh_token: str) -> Dict:
-        url = f"{self.microsoft_auth_endpoint}/token"
-        data = {"client_id": self.client_id, "refresh_token": refresh_token, "grant_type": "refresh_token", "scope": "XboxLive.signin offline_access"}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data) as response:
-                response.raise_for_status()
-                return await response.json()
-
+    async def _get_microsoft_token(self, refresh_token: Optional[str] = None) -> Dict:
+        # 使用asyncio.to_thread在异步上下文中运行同步的MSAL方法
+        if refresh_token:
+            # 使用刷新令牌获取新的访问令牌
+            result = await asyncio.to_thread(
+                lambda: self.msal_app.acquire_token_by_refresh_token(
+                    refresh_token=refresh_token,
+                    scopes=self.scopes))
+            if "error" in result:
+                # 特别处理刷新令牌失效的情况
+                if result.get("error") == "invalid_grant":
+                    logger.warning("刷新令牌已过期，需要重新认证")
+                    return await self._get_microsoft_token(None)  # 递归调用获取新令牌
+                raise Exception(f"刷新令牌失败: {result.get('error_description')}")
+            return result
+        else:
+            flow = await asyncio.to_thread(  # 使用设备代码流获取令牌
+                lambda: self.msal_app.initiate_device_flow(scopes=self.scopes)
+            )
+            if "user_code" not in flow:
+                raise Exception(f"创建设备流失败: {flow.get('error_description')}")
+            print(f"请打开 {flow['verification_uri']}")
+            print(f"并输入代码: {flow['user_code']}")
+            print("代码已复制到剪贴板")
+            pyperclip.copy(flow['user_code'])
+            webbrowser.open(flow['verification_uri'])
+            result = await asyncio.to_thread(  # 轮询等待用户授权
+                lambda: self.msal_app.acquire_token_by_device_flow(flow)
+            )
+            if "error" in result:
+                raise Exception(f"设备授权失败: {result.get('error_description')}")
+            return result
     async def _authenticate_with_xbox_live(self, microsoft_token: str) -> Tuple[str, str]:
         url = self.xbox_auth_endpoint
-        payload = {"Properties": {"AuthMethod": "RPS", "SiteName": "user.auth.xboxlive.com", "RpsTicket": f"d={microsoft_token}"}, "RelyingParty": "http://auth.xboxlive.com", "TokenType": "JWT"}
+        payload = {"Properties": {"AuthMethod": "RPS", "SiteName": "user.auth.xboxlive.com",
+                                  "RpsTicket": f"d={microsoft_token}"}, "RelyingParty": "http://auth.xboxlive.com",
+                   "TokenType": "JWT"}
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers={"Content-Type": "application/json", "Accept": "application/json"}, json=payload) as response:
+            async with session.post(url, headers={"Content-Type": "application/json", "Accept": "application/json"},
+                                    json=payload) as response:
                 response.raise_for_status()
                 data = await response.json()
                 return data["Token"], data["DisplayClaims"]["xui"][0]["uhs"]
 
     async def _authenticate_with_xsts(self, xbl_token: str) -> Tuple[str, str]:
         url = self.xsts_auth_endpoint
-        payload = {"Properties": {"SandboxId": "RETAIL", "UserTokens": [xbl_token]}, "RelyingParty": "rp://api.minecraftservices.com/", "TokenType": "JWT"}
+        payload = {"Properties": {"SandboxId": "RETAIL", "UserTokens": [xbl_token]},
+                   "RelyingParty": "rp://api.minecraftservices.com/", "TokenType": "JWT"}
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers={"Content-Type": "application/json", "Accept": "application/json"}, json=payload) as response:
+            async with session.post(url, headers={"Content-Type": "application/json", "Accept": "application/json"},
+                                    json=payload) as response:
                 if response.status == 401:
                     data = await response.json()
                     raise Exception(f"XSTS 验证失败: {data.get('XErr')} - {data.get('Message')}")
@@ -153,12 +150,16 @@ class MicrosoftAuthenticator(IAuthenticator):
 class OfflineAuthenticator(IAuthenticator):
     async def authenticate(self, refresh_token: Optional[str] = None) -> Dict:
         print("使用离线验证...")
-        return {"username": "Player", "uuid": "00000000-0000-0000-0000-000000000000", "access_token": "offline_token", "refresh_token": "", "skins": [], "capes": []}
+        return {"username": "Player", "uuid": "00000000-0000-0000-0000-000000000000", "access_token": "offline_token",
+                "refresh_token": "", "skins": [], "capes": []}
+
 
 class ThirdPartyAuthenticator(IAuthenticator):
     async def authenticate(self, refresh_token: Optional[str] = None) -> Dict:
         print("使用第三方验证...")
-        return {"username": "ThirdPartyPlayer", "uuid": "11111111-1111-1111-1111-111111111111", "access_token": "third_party_token", "refresh_token": "", "skins": [], "capes": []}
+        return {"username": "ThirdPartyPlayer", "uuid": "11111111-1111-1111-1111-111111111111",
+                "access_token": "third_party_token", "refresh_token": "", "skins": [], "capes": []}
+
 
 class AuthManager:
     def __init__(self):

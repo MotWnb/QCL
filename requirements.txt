@@ -5,3 +5,4 @@ watchdog
 pyperclip
 py-machineid
 cryptography
+msal
