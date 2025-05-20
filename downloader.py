@@ -2,8 +2,7 @@ import asyncio
 import json
 import os
 import aiofiles
-from log_manager import logger
-from utils import Utils
+from utils import Utils, logger
 
 class IDownloader:
     async def download_file(self, url, dest, sha1=None): pass

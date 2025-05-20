@@ -6,11 +6,10 @@ import shutil
 import aiofiles
 import aiohttp
 
-from config_utils import IConfigManager
+from utils import IConfigManager
 from downloader import IDownloader
 from launcher import ILauncher
-from log_manager import logger as logging
-from utils import IUtils
+from utils import logger as logging, IUtils
 
 async def main(config_manager: IConfigManager, downloader: IDownloader, launcher: ILauncher, utils: IUtils):
     observer = config_manager.start_config_watcher()
@@ -76,7 +75,7 @@ async def main(config_manager: IConfigManager, downloader: IDownloader, launcher
     observer.join()
 
 if __name__ == "__main__":
-    from config_utils import ConfigManager
+    from utils import ConfigManager
     from downloader import DownloadClass
     from launcher import MinecraftLauncher
     from utils import Utils
@@ -85,4 +84,5 @@ if __name__ == "__main__":
     downloader = DownloadClass(None, config)  # 传递配置字典
     launcher = MinecraftLauncher()
     utils = Utils()
+    # 日志初始化已由 utils.py 统一管理
     asyncio.run(main(config_manager, downloader, launcher, utils))

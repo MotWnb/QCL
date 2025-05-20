@@ -5,8 +5,7 @@ import sys
 from threading import Thread
 from typing import Callable, Optional
 
-from log_manager import logger as logging
-from utils import IUtils
+from utils import logger as logging, IUtils
 
 class ILauncher:
     async def get_args(self, version_info, version, version_isolation_enabled, config, utils: IUtils): pass
