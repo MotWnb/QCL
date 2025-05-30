@@ -252,7 +252,7 @@ class Utils(IUtils):
                             scanned_paths.add(parent_dir)
                             version = await get_java_version(parent_dir)
                             java_versions[parent_dir] = version
-                            logger.info(f"Found Java {version} at {parent_dir}")
+                            logger.debug(f"Found Java {version} at {parent_dir}")
                         continue
                     if entry.is_dir() and not entry.name.startswith("."):
                         dir_name = entry.name.lower()

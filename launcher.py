@@ -13,11 +13,29 @@ class ILauncher:
     async def launcher(self, version_info, version, version_cwd, version_isolation_enabled, config, utils: IUtils): pass
 
 class MinecraftLauncher(ILauncher):
-    async def get_args(self, version_info, version, version_isolation_enabled, config, utils: IUtils):
+    async def get_args(self, version_info, version, version_isolation_enabled, config, utils: IUtils, auth_info=None):
+        # 认证/输入和 Java 检测并发进行，输入期间屏蔽 console 日志
+        import logging as _logging
+        from utils import logger as qcl_logger
+        # 获取 console handler
+        console_handler = None
+        for h in qcl_logger.handlers:
+            if isinstance(h, _logging.StreamHandler):
+                console_handler = h
+                break
+        old_console_level = None
+        if console_handler:
+            old_console_level = console_handler.level
+            console_handler.setLevel(_logging.CRITICAL + 1)  # 屏蔽所有 console 输出
+        # 并发任务
         java_task = asyncio.create_task(utils.async_find_java(config))
-        username = "QCLTEST"
-        auth_uuid = "6a058693-08f0-4404-b53f-c17bb3acea64"
-        token = "6a058693-08f0-4404-b53f-c17bb3acea64"
+        # 认证/输入
+        if auth_info is None:
+            from auth import perform_authentication
+            auth_info = await perform_authentication()
+        username = auth_info.get("username", "QCLTEST")
+        auth_uuid = auth_info.get("uuid", "6a058693-08f0-4404-b53f-c17bb3acea64")
+        token = auth_info.get("access_token", "6a058693-08f0-4404-b53f-c17bb3acea64")
         os_name, raw_arch = await utils.get_os_info()
         os_arch = f"x{raw_arch}" if raw_arch in ["86", "64"] else raw_arch
         original_game_directory = os.path.abspath(config['minecraft_base_dir'])
@@ -25,6 +43,12 @@ class MinecraftLauncher(ILauncher):
         natives_directory = os.path.join(original_game_directory, "versions", version, f"{version}-natives")
         game_directory = version_directory if version_isolation_enabled else original_game_directory
         cp_task = asyncio.create_task(utils.get_cp(version_info, version, os_name, os_arch, version_directory, config))
+        # 恢复 console handler 日志级别
+        if console_handler and old_console_level is not None:
+            console_handler.setLevel(old_console_level)
+        # 等待 Java 检测和 cp 结果
+        java_map = await java_task
+        cp = await cp_task
         game_args = []
         for arg in version_info.get('arguments', {}).get('game', []):
             if isinstance(arg, str): game_args.append(arg)
@@ -52,17 +76,16 @@ class MinecraftLauncher(ILauncher):
         required_jvm_args = ["-XX:+UseG1GC", "-XX:-UseAdaptiveSizePolicy", "-XX:-OmitStackTraceInFastThrow", "-Djdk.lang.Process.allowAmbiguousCommands=true", "-Dfml.ignoreInvalidMinecraftCertificates=True", "-Dfml.ignorePatchDiscrepancies=True", "-Dlog4j2.formatMsgNoLookups=true", "-Djava.library.path=${natives_directory}", "-Djna.tmpdir=${natives_directory}", "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}", "-Dio.netty.native.workdir=${natives_directory}", "-cp ${classpath}"]
         for arg in required_jvm_args:
             if arg not in java_args: java_args.append(arg)
-        java_map = await java_task
-        cp = await cp_task
         log_config = version_info.get('logging', {}).get('client', {})
         log4j_arg = log_config.get('argument', '').replace("${path}", os.path.join(version_directory, "log4j2.xml")) if log_config else ""
-        replacements = {"${auth_player_name}": username, "${classpath}": cp, "${natives_directory}": natives_directory, "${launcher_name}": "MinecraftLauncher", "${launcher_version}": "1.0", "${version_name}": version, "${version_type}": version_info.get('type', 'release'), "${assets_root}": os.path.join(original_game_directory, "assets"), "${assets_index_name}": version_info.get('assets', 'legacy'), "${game_directory}": game_directory, "${auth_uuid}": auth_uuid, "${auth_access_token}": token, "${user_type}": "msa"}
+        replacements = {"${auth_player_name}": username, "${classpath}": cp, "${natives_directory}": natives_directory, "${launcher_name}": "MinecraftLauncher", "${launcher_version}": "1.0", "${version_name}": version, "${version_type}": version_info.get('type', 'release'), "${assets_root}": os.path.join(original_game_directory, "assets"), "${assets_index_name}": version_info.get('assets', 'legacy'), "${game_directory}": game_directory, "${auth_uuid}": auth_uuid, "${auth_access_token}": token, "${user_type}": auth_info.get("user_type", "msa")}
         required_java_version = str(version_info.get('javaVersion', {}).get("majorVersion", "21"))
-        logging.info(f"需要的Java版本: {required_java_version}")
-        logging.info("检测到的Java安装：")
+        # 只在此处输出 info 级别 Java 检测结果
+        logging.debug(f"需要的Java版本: {required_java_version}")
+        logging.debug("检测到的Java安装：")
         java_path = ""
         for path, ver in java_map.items():
-            logging.info(f"  {ver.ljust(10)} : {path}")
+            logging.debug(f"  {ver.ljust(10)} : {path}")
             if ver.replace("Java", "").strip() == required_java_version:
                 java_exe = "javaw.exe" if os_name == "windows" else "java"
                 candidate_path = os.path.join(path, java_exe)
@@ -117,7 +140,7 @@ class MinecraftLauncher(ILauncher):
         process.stderr.close()
         return process.returncode
 
-    async def launcher(self, version_info, version, version_cwd, version_isolation_enabled, config, utils: IUtils):
-        args = await self.get_args(version_info, version, version_isolation_enabled, config, utils)
+    async def launcher(self, version_info, version, version_cwd, version_isolation_enabled, config, utils: IUtils, auth_info=None):
+        args = await self.get_args(version_info, version, version_isolation_enabled, config, utils, auth_info=auth_info)
         exit_code = self.execute_javaw_blocking(args, cwd=version_cwd)
         logging.info(f"进程退出码: {exit_code}")

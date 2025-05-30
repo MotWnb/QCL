@@ -19,6 +19,10 @@ async def main(config_manager: IConfigManager, downloader: IDownloader, launcher
         shutil.rmtree(temp_path)
         logging.info("已删除临时目录 .temp")
     os_name, os_arch = await utils.get_os_info()
+    from auth import UserManager, AuthManager
+    user_manager = UserManager("QCL/users.ini")
+    await user_manager.user_load()
+    refresh_task = None
     while True:
         user_choice = input("请输入你想要的操作:\n1. 下载\n2. 启动\n3. 设置\n4. 退出\n")
         connector = aiohttp.TCPConnector(limit_per_host=1024)
@@ -49,6 +53,9 @@ async def main(config_manager: IConfigManager, downloader: IDownloader, launcher
                 logging.info(f"开始下载版本 {selected_version} 的所有文件")
                 await downloader.download_version(version_info, selected_version, os_name, os_arch)
             elif user_choice == "2":
+                # 启动前自动刷新账户（异步并发，不阻塞输入）
+                if refresh_task is None or refresh_task.done():
+                    refresh_task = asyncio.create_task(user_manager.refresh_all_users(AuthManager()))
                 versions = os.listdir(os.path.join(config['minecraft_base_dir'], 'versions'))
                 version = input(f"请输入要启动的版本: {versions}\n")
                 version_info_path = os.path.join(config['minecraft_base_dir'], 'versions', version, f"{version}.json")
@@ -66,6 +73,10 @@ async def main(config_manager: IConfigManager, downloader: IDownloader, launcher
                 logging.info(f"开始启动版本 {version}")
                 await launcher.launcher(version_info, version, version_cwd, version_isolation_enabled, config, utils)
             elif user_choice == "3":
+                # 登录/认证前等待刷新完成
+                if refresh_task is not None and not refresh_task.done():
+                    logging.info("等待账户刷新完成...")
+                    await refresh_task
                 await config_manager.settings()
             elif user_choice == "4":
                 break

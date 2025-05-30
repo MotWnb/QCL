@@ -8,3 +8,5 @@ aihelper.py
 /test.bat
 /QCL/
 auth_test.py
+/__pycache__
+/.vscode

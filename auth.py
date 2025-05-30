@@ -149,9 +149,21 @@ class MicrosoftAuthenticator(IAuthenticator):
 
 class OfflineAuthenticator(IAuthenticator):
     async def authenticate(self, refresh_token: Optional[str] = None) -> Dict:
+        import uuid
         print("使用离线验证...")
-        return {"username": "Player", "uuid": "00000000-0000-0000-0000-000000000000", "access_token": "offline_token",
-                "refresh_token": "", "skins": [], "capes": []}
+        # 异步获取用户名
+        loop = asyncio.get_event_loop()
+        username = await loop.run_in_executor(None, input, "请输入离线用户名: ")
+        # 生成 UUID（使用离线算法，和 Minecraft 官方一致）
+        offline_uuid = str(uuid.uuid3(uuid.NAMESPACE_DNS, f"OfflinePlayer:{username}"))
+        return {
+            "username": username,
+            "uuid": offline_uuid,
+            "access_token": "offline_token",
+            "refresh_token": "",
+            "skins": [],
+            "capes": []
+        }
 
 
 class ThirdPartyAuthenticator(IAuthenticator):
@@ -175,21 +187,58 @@ class AuthManager:
         return await self._authenticators[method].authenticate(refresh_token)
 
     @staticmethod
-    async def prompt_for_auth_method() -> AuthMethod:
+    async def async_input(prompt: str) -> str:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, input, prompt)
+
+    @classmethod
+    async def prompt_for_auth_method(cls) -> AuthMethod:
         print("\n请选择验证方式:")
         print("1. 微软正版验证")
         print("2. 离线验证")
         print("3. 第三方验证")
+        print("4. 登录已有账户")
         while True:
-            choice = input("请输入数字选择 (1-3): ").strip()
+            choice = await cls.async_input("请输入数字选择 (1-4): ")
+            choice = choice.strip()
             if choice == "1":
                 return AuthMethod.MICROSOFT
             elif choice == "2":
                 return AuthMethod.OFFLINE
             elif choice == "3":
                 return AuthMethod.THIRD_PARTY
+            elif choice == "4":
+                # 登录已有账户
+                from auth import UserManager
+                user_manager = UserManager("QCL/users.ini")
+                await user_manager.user_load()
+                users = user_manager.list_all_users()
+                if not users:
+                    print("暂无本地账户，请先新增账户。")
+                    continue
+                print("已有账户:")
+                for idx, user in enumerate(users):
+                    if user.get("access_token", "").startswith("offline"):
+                        typ = "离线"
+                    elif user.get("access_token", "").startswith("third_party"):
+                        typ = "第三方"
+                    else:
+                        typ = "微软"
+                    print(f"{idx+1}. {user['username']} ({typ})")
+                sel = await cls.async_input("请选择要登录的账户编号: ")
+                try:
+                    sel_idx = int(sel) - 1
+                    if 0 <= sel_idx < len(users):
+                        # 返回特殊 AuthMethod 并附带用户信息
+                        cls._selected_user = users[sel_idx]
+                        return "EXISTING_USER"
+                    else:
+                        print("无效选择")
+                except Exception:
+                    print("无效输入")
             else:
                 print("无效的选择，请重新输入")
+    _selected_user = None
 
 class UserManager:
     def __init__(self, data_file: str = "users.json"):
@@ -197,29 +246,35 @@ class UserManager:
         self.users = {}
 
     @staticmethod
-    def _get_fernet_key() -> bytes:
-        device_id = machineid.id().encode('utf-8')
-        sha256_hash = hashlib.sha256(device_id).digest()
+    async def _get_fernet_key() -> bytes:
+        loop = asyncio.get_event_loop()
+        device_id = await loop.run_in_executor(None, machineid.id)
+        sha256_hash = hashlib.sha256(device_id.encode('utf-8')).digest()
         return base64.urlsafe_b64encode(sha256_hash)
 
     @staticmethod
-    def encrypt_dict(data: dict) -> str:
-        key = UserManager._get_fernet_key()
+    async def encrypt_dict(data: dict) -> str:
+        key = await UserManager._get_fernet_key()
         cipher = Fernet(key)
-        return cipher.encrypt(json.dumps(data).encode('utf-8')).decode('ascii')
+        loop = asyncio.get_event_loop()
+        json_data = await loop.run_in_executor(None, json.dumps, data)
+        encrypted = await loop.run_in_executor(None, cipher.encrypt, json_data.encode('utf-8'))
+        return encrypted.decode('ascii')
 
     @staticmethod
-    def decrypt_dict(encrypted_data: str) -> dict:
-        key = UserManager._get_fernet_key()
+    async def decrypt_dict(encrypted_data: str) -> dict:
+        key = await UserManager._get_fernet_key()
         cipher = Fernet(key)
-        return json.loads(cipher.decrypt(encrypted_data.encode('ascii')).decode('utf-8'))
+        loop = asyncio.get_event_loop()
+        decrypted = await loop.run_in_executor(None, cipher.decrypt, encrypted_data.encode('ascii'))
+        return await loop.run_in_executor(None, json.loads, decrypted.decode('utf-8'))
 
     async def user_load(self) -> Dict[str, Dict]:
         try:
             if os.path.exists(self.data_file):
                 async with aiofiles.open(self.data_file, 'r', encoding='utf-8') as file:
                     content = await file.read()
-                    self.users = self.decrypt_dict(content)
+                    self.users = await self.decrypt_dict(content)
                     logger.info(f"成功加载 {len(self.users)} 个用户数据")
             else:
                 logger.info("用户数据文件不存在，创建空数据")
@@ -237,6 +292,8 @@ class UserManager:
         for field in required_fields:
             if field not in user_data:
                 raise ValueError(f"用户数据缺少必要字段: {field}")
+        # 先加载已有数据，避免覆盖
+        await self.user_load()
         self.users[uuid] = user_data
         await self._save_to_file()
         logger.info(f"用户数据已保存: {user_data['username']} ({uuid})")
@@ -244,7 +301,8 @@ class UserManager:
     async def _save_to_file(self) -> None:
         try:
             async with aiofiles.open(self.data_file, 'w', encoding='utf-8') as file:
-                await file.write(self.encrypt_dict(self.users))
+                encrypted = await self.encrypt_dict(self.users)
+                await file.write(encrypted)
         except Exception as e:
             logger.error(f"保存用户数据失败: {str(e)}")
 
@@ -266,14 +324,14 @@ class UserManager:
         if not self.users:
             logger.info("没有需要刷新的用户")
             return
-        logger.info(f"开始刷新 {len(self.users)} 个用户的账户信息...")
+        logger.debug(f"开始刷新 {len(self.users)} 个用户的账户信息...")
         for uuid, user_data in list(self.users.items()):
             try:
                 refresh_token = user_data.get("refresh_token")
                 if not refresh_token:
-                    logger.warning(f"用户 {uuid} 没有刷新令牌，跳过刷新")
+                    logger.debug(f"用户 {uuid} 没有刷新令牌，跳过刷新")
                     continue
-                logger.info(f"正在刷新用户: {user_data['username']} ({uuid})")
+                logger.debug(f"正在刷新用户: {user_data['username']} ({uuid})")
                 new_data = await auth_manager.authenticate(method=AuthMethod.MICROSOFT, refresh_token=refresh_token)
                 new_data["uuid"] = uuid
                 await self.user_save(uuid, new_data)
@@ -285,6 +343,9 @@ class UserManager:
 async def perform_authentication(refresh_token: Optional[str] = None) -> Dict:
     manager = AuthManager()
     auth_method = await manager.prompt_for_auth_method()
+    if auth_method == "EXISTING_USER":
+        # 直接返回已选用户
+        return manager._selected_user
     auth_result = await manager.authenticate(auth_method, refresh_token)
     user_manager = UserManager("QCL/users.ini")
     await user_manager.user_save(auth_result["uuid"], auth_result)
